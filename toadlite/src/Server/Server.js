@@ -12,10 +12,7 @@ app.use(express.json());
 
 // Configuration Oracle
 const dbConfig = {
-    // pour connaitre si la base est XE ou autre exectuer sur le server la ligne de commande suivante:
-    //SELECT instance_name, host_name, version FROM v$instance;
     connectString:'10.200.222.123:1521/ORCL_PRI'
-    // connectString: '192.168.88.110:1521/XE'
 };
 
 // Schémas de base de données
@@ -82,10 +79,10 @@ app.get('/api/tables/:schema', async (req, res) => {
 
         // Récupérer toutes les tables de l'utilisateur
         const tablesResult = await connection.execute(`
-      SELECT table_name 
-      FROM user_tables 
-      ORDER BY table_name
-    `);
+            SELECT table_name
+            FROM user_tables
+            ORDER BY table_name
+        `);
 
         const tables = {};
 
@@ -94,14 +91,14 @@ app.get('/api/tables/:schema', async (req, res) => {
 
             // Récupérer les colonnes de la table
             const columnsResult = await connection.execute(`
-        SELECT 
-          column_name,
-          data_type,
-          nullable
-        FROM user_tab_columns 
-        WHERE table_name = :tableName 
-        ORDER BY column_id
-      `, { tableName });
+                SELECT
+                    column_name,
+                    data_type,
+                    nullable
+                FROM user_tab_columns
+                WHERE table_name = :tableName
+                ORDER BY column_id
+            `, { tableName });
 
             tables[tableName] = {
                 name: tableName,
@@ -129,7 +126,7 @@ app.get('/api/tables/:schema', async (req, res) => {
     }
 });
 
-// Exécuter une requête avec calculs
+// Exécuter une requête avec calculs par ligne
 app.post('/api/execute-query', async (req, res) => {
     const { schema, table, columns, filters, sorting, aggregates, limit = 1000 } = req.body;
 
@@ -151,38 +148,17 @@ app.post('/api/execute-query', async (req, res) => {
         // 1. Ajouter les colonnes normales (si sélectionnées)
         if (columns && columns.length > 0) {
             selectItems.push(...columns.map(col => `"${col}"`));
+        } else {
+            // Si aucune colonne n'est sélectionnée, prendre toutes les colonnes
+            const allColumns = await connection.execute(
+                `SELECT column_name FROM user_tab_columns WHERE table_name = :tableName ORDER BY column_id`,
+                { tableName: table }
+            );
+            selectItems.push(...allColumns.rows.map(row => `"${row[0]}"`));
         }
 
-        // 2. Ajouter les calculs (agrégats)
-        if (aggregates && aggregates.length > 0) {
-            aggregates.forEach((agg) => {
-                if (agg.type === 'COUNT') {
-                    if (agg.columns && agg.columns.length > 0) {
-                        // COUNT sur une colonne spécifique
-                        selectItems.push(`COUNT("${agg.columns[0]}") AS "${agg.alias || 'count_' + agg.columns[0]}"`);
-                    } else {
-                        // COUNT(*) - compter tous les enregistrements
-                        selectItems.push(`COUNT(*) AS "${agg.alias || 'total_count'}"`);
-                    }
-                } else if (agg.type === 'SUM') {
-                    if (agg.columns && agg.columns.length > 0) {
-                        // SUM sur une colonne
-                        selectItems.push(`SUM("${agg.columns[0]}") AS "${agg.alias || 'sum_' + agg.columns[0]}"`);
-                    }
-                } else if (agg.type === 'AVG') {
-                    if (agg.columns && agg.columns.length > 0) {
-                        // AVG sur une colonne
-                        selectItems.push(`AVG("${agg.columns[0]}") AS "${agg.alias || 'avg_' + agg.columns[0]}"`);
-                    }
-                }
-            });
-        }
-
-        // Si aucune colonne ni calcul n'est sélectionné, prendre toutes les colonnes
-        const selectClause = selectItems.length > 0 ?
-            selectItems.join(', ') : '*';
-
-        let sql = `SELECT ${selectClause} FROM "${table}"`;
+        // Construire la requête de base
+        let sql = `SELECT ${selectItems.join(', ')} FROM "${table}"`;
         const bindParams = {};
 
         // Ajouter les filtres WHERE
@@ -221,26 +197,9 @@ app.post('/api/execute-query', async (req, res) => {
             }
         }
 
-        // Ajouter GROUP BY si on a à la fois des colonnes normales ET des calculs
-        // (comme en SQL : SELECT colonne, SUM(valeur) FROM table GROUP BY colonne)
-        if (columns && columns.length > 0 && aggregates && aggregates.length > 0) {
-            const groupByColumns = columns.map(col => `"${col}"`);
-            sql += ` GROUP BY ${groupByColumns.join(', ')}`;
-        }
-
         // Ajouter ORDER BY
         if (sorting && sorting.length > 0) {
             const orderByClauses = sorting.map(sort => {
-                // Vérifier si le tri s'applique sur une colonne de calcul
-                const isAggregateColumn = aggregates?.some(agg =>
-                    agg.alias === sort.field ||
-                    sort.field.startsWith(agg.type.toLowerCase()) ||
-                    sort.field.includes('sum_') ||
-                    sort.field.includes('avg_') ||
-                    sort.field.includes('count_')
-                );
-
-                // Pour les calculs, on utilise déjà l'alias dans le SELECT
                 return `"${sort.field}" ${sort.direction}`;
             });
             sql += ` ORDER BY ${orderByClauses.join(', ')}`;
@@ -252,19 +211,106 @@ app.post('/api/execute-query', async (req, res) => {
             bindParams.limit = limit;
         }
 
-        console.log('Requête SQL complète:', sql);
+        console.log('Requête SQL de base:', sql);
         console.log('Paramètres:', bindParams);
 
+        // Exécuter la requête
         const result = await connection.execute(sql, bindParams, {
             outFormat: oracledb.OUT_FORMAT_OBJECT,
             maxRows: limit || 1000
         });
 
+        // Appliquer les calculs par LIGNE côté serveur
+        let finalResults = result.rows;
+
+        if (aggregates && aggregates.length > 0) {
+            finalResults = result.rows.map(row => {
+                const newRow = { ...row };
+
+                aggregates.forEach(agg => {
+                    if (agg.type === 'SUM') {
+                        // Calculer la somme des colonnes sélectionnées pour chaque ligne
+                        let sum = 0;
+                        let hasValidValues = false;
+
+                        agg.columns.forEach(col => {
+                            const value = row[col];
+                            if (value !== null && value !== undefined && !isNaN(value)) {
+                                sum += parseFloat(value);
+                                hasValidValues = true;
+                            }
+                        });
+
+                        newRow[agg.alias || `sum_${agg.columns.join('_')}`] = hasValidValues ? sum : null;
+                    }
+                    else if (agg.type === 'AVG') {
+                        // Calculer la moyenne des colonnes sélectionnées pour chaque ligne
+                        let sum = 0;
+                        let count = 0;
+
+                        agg.columns.forEach(col => {
+                            const value = row[col];
+                            if (value !== null && value !== undefined && !isNaN(value)) {
+                                sum += parseFloat(value);
+                                count++;
+                            }
+                        });
+
+                        const avg = count > 0 ? sum / count : null;
+                        newRow[agg.alias || `avg_${agg.columns.join('_')}`] = avg;
+                    }
+                    else if (agg.type === 'COUNT') {
+                        // Compter le nombre de colonnes non-nulles pour chaque ligne
+                        let count = 0;
+
+                        if (agg.columns.length === 0) {
+                            // COUNT(*) - compter toutes les colonnes non-nulles
+                            Object.keys(row).forEach(key => {
+                                if (row[key] !== null && row[key] !== undefined) {
+                                    count++;
+                                }
+                            });
+                        } else {
+                            agg.columns.forEach(col => {
+                                if (row[col] !== null && row[col] !== undefined) {
+                                    count++;
+                                }
+                            });
+                        }
+
+                        newRow[agg.alias || `count_${agg.columns.join('_') || 'all'}`] = count;
+                    }
+                });
+
+                return newRow;
+            });
+        }
+
+        // Générer les métadonnées
+        const metaData = result.metaData ? [...result.metaData] : [];
+
+        // Ajouter les métadonnées pour les nouvelles colonnes calculées
+        if (aggregates && aggregates.length > 0) {
+            aggregates.forEach(agg => {
+                const alias = agg.alias ||
+                    (agg.type === 'SUM' ? `sum_${agg.columns.join('_')}` :
+                        agg.type === 'AVG' ? `avg_${agg.columns.join('_')}` :
+                            `count_${agg.columns.join('_') || 'all'}`);
+
+                metaData.push({
+                    name: alias,
+                    dbType: agg.type === 'AVG' ? 'NUMBER' : 'NUMBER',
+                    precision: agg.type === 'AVG' ? 10 : 10,
+                    scale: agg.type === 'AVG' ? 2 : 0
+                });
+            });
+        }
+
         res.json({
             success: true,
-            data: result.rows,
-            metaData: result.metaData,
-            count: result.rows.length
+            data: finalResults,
+            metaData: metaData,
+            count: finalResults.length
         });
 
     } catch (error) {
@@ -304,52 +350,6 @@ app.get('/api/sample-data/:schema/:table', async (req, res) => {
         );
 
         res.json(result.rows);
-    } catch (error) {
-        console.error('Erreur:', error);
-        res.status(500).json({ error: error.message });
-    } finally {
-        if (connection) {
-            try {
-                await connection.close();
-            } catch (error) {
-                console.error('Erreur fermeture:', error);
-            }
-        }
-    }
-});
-
-// Vérifier le type d'une colonne
-app.get('/api/column-info/:schema/:table/:column', async (req, res) => {
-    const { schema, table, column } = req.params;
-
-    if (!SCHEMAS[schema]) {
-        return res.status(400).json({ error: `Schéma ${schema} non configuré` });
-    }
-
-    let connection;
-    try {
-        const config = { ...SCHEMAS[schema], ...dbConfig };
-        connection = await oracledb.getConnection(config);
-
-        const result = await connection.execute(`
-            SELECT data_type 
-            FROM user_tab_columns 
-            WHERE table_name = :tableName 
-            AND column_name = :columnName
-        `, { tableName: table, columnName: column });
-
-        if (result.rows.length > 0) {
-            const dataType = result.rows[0][0];
-            const isNumeric = ['NUMBER', 'FLOAT', 'INTEGER', 'DECIMAL'].includes(dataType);
-
-            res.json({
-                dataType: dataType,
-                isNumeric: isNumeric,
-                mappedType: mapOracleType(dataType)
-            });
-        } else {
-            res.status(404).json({ error: 'Colonne non trouvée' });
-        }
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: error.message });
@@ -422,7 +422,6 @@ app.listen(PORT, () => {
     console.log('   GET  /api/tables/:schema');
     console.log('   POST /api/execute-query');
     console.log('   GET  /api/sample-data/:schema/:table');
-    console.log('   GET  /api/column-info/:schema/:table/:column');
 });
 
 // Gestion propre de la fermeture
