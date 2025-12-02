@@ -127,8 +127,212 @@ app.get('/api/tables/:schema', async (req, res) => {
 });
 
 // Exécuter une requête avec calculs par ligne
+// app.post('/api/execute-query', async (req, res) => {
+//     const { schema, table, columns, filters, sorting, aggregates, limit = 1000 } = req.body;
+//
+//     if (!SCHEMAS[schema]) {
+//         return res.status(400).json({
+//             success: false,
+//             error: `Schéma ${schema} non configuré`
+//         });
+//     }
+//
+//     let connection;
+//     try {
+//         const config = { ...SCHEMAS[schema], ...dbConfig };
+//         connection = await oracledb.getConnection(config);
+//
+//         // Construire la liste des colonnes SELECT
+//         let selectItems = [];
+//
+//         // 1. Ajouter les colonnes normales (si sélectionnées)
+//         if (columns && columns.length > 0) {
+//             selectItems.push(...columns.map(col => `"${col}"`));
+//         } else {
+//             // Si aucune colonne n'est sélectionnée, prendre toutes les colonnes
+//             const allColumns = await connection.execute(
+//                 `SELECT column_name FROM user_tab_columns WHERE table_name = :tableName ORDER BY column_id`,
+//                 { tableName: table }
+//             );
+//             selectItems.push(...allColumns.rows.map(row => `"${row[0]}"`));
+//         }
+//
+//         // Construire la requête de base
+//         let sql = `SELECT ${selectItems.join(', ')} FROM "${table}"`;
+//         const bindParams = {};
+//
+//         // Ajouter les filtres WHERE
+//         if (filters && filters.length > 0) {
+//             const whereConditions = [];
+//
+//             filters.forEach((filter, index) => {
+//                 if (!filter.field || !filter.operator) return;
+//
+//                 let condition;
+//                 const paramName = `val${index}`;
+//
+//                 switch (filter.operator) {
+//                     case '=':
+//                     case '!=':
+//                     case '>':
+//                     case '<':
+//                     case '>=':
+//                     case '<=':
+//                         condition = `"${filter.field}" ${filter.operator} :${paramName}`;
+//                         bindParams[paramName] = convertValue(filter.value);
+//                         break;
+//                     case 'contient':
+//                         condition = `UPPER("${filter.field}") LIKE UPPER(:${paramName})`;
+//                         bindParams[paramName] = `%${filter.value}%`;
+//                         break;
+//                     default:
+//                         return;
+//                 }
+//
+//                 whereConditions.push(condition);
+//             });
+//
+//             if (whereConditions.length > 0) {
+//                 sql += ` WHERE ${whereConditions.join(' AND ')}`;
+//             }
+//         }
+//
+//         // Ajouter ORDER BY
+//         if (sorting && sorting.length > 0) {
+//             const orderByClauses = sorting.map(sort => {
+//                 return `"${sort.field}" ${sort.direction}`;
+//             });
+//             sql += ` ORDER BY ${orderByClauses.join(', ')}`;
+//         }
+//
+//         // Ajouter LIMIT (ROWNUM pour Oracle)
+//         if (limit) {
+//             sql = `SELECT * FROM (${sql}) WHERE ROWNUM <= :limit`;
+//             bindParams.limit = limit;
+//         }
+//
+//         console.log('Requête SQL de base:', sql);
+//         console.log('Paramètres:', bindParams);
+//
+//         // Exécuter la requête
+//         const result = await connection.execute(sql, bindParams, {
+//             outFormat: oracledb.OUT_FORMAT_OBJECT,
+//             maxRows: limit || 1000
+//         });
+//
+//         // Appliquer les calculs par LIGNE côté serveur
+//         let finalResults = result.rows;
+//
+//         if (aggregates && aggregates.length > 0) {
+//             finalResults = result.rows.map(row => {
+//                 const newRow = { ...row };
+//
+//                 aggregates.forEach(agg => {
+//                     if (agg.type === 'SUM') {
+//                         // Calculer la somme des colonnes sélectionnées pour chaque ligne
+//                         let sum = 0;
+//                         let hasValidValues = false;
+//
+//                         agg.columns.forEach(col => {
+//                             const value = row[col];
+//                             if (value !== null && value !== undefined && !isNaN(value)) {
+//                                 sum += parseFloat(value);
+//                                 hasValidValues = true;
+//                             }
+//                         });
+//
+//                         newRow[agg.alias || `sum_${agg.columns.join('_')}`] = hasValidValues ? sum : null;
+//                     }
+//                     else if (agg.type === 'AVG') {
+//                         // Calculer la moyenne des colonnes sélectionnées pour chaque ligne
+//                         let sum = 0;
+//                         let count = 0;
+//
+//                         agg.columns.forEach(col => {
+//                             const value = row[col];
+//                             if (value !== null && value !== undefined && !isNaN(value)) {
+//                                 sum += parseFloat(value);
+//                                 count++;
+//                             }
+//                         });
+//
+//                         const avg = count > 0 ? sum / count : null;
+//                         newRow[agg.alias || `avg_${agg.columns.join('_')}`] = avg;
+//                     }
+//                     else if (agg.type === 'COUNT') {
+//                         // Compter le nombre de colonnes non-nulles pour chaque ligne
+//                         let count = 0;
+//
+//                         if (agg.columns.length === 0) {
+//                             // COUNT(*) - compter toutes les colonnes non-nulles
+//                             Object.keys(row).forEach(key => {
+//                                 if (row[key] !== null && row[key] !== undefined) {
+//                                     count++;
+//                                 }
+//                             });
+//                         } else {
+//                             agg.columns.forEach(col => {
+//                                 if (row[col] !== null && row[col] !== undefined) {
+//                                     count++;
+//                                 }
+//                             });
+//                         }
+//
+//                         newRow[agg.alias || `count_${agg.columns.join('_') || 'all'}`] = count;
+//                     }
+//                 });
+//
+//                 return newRow;
+//             });
+//         }
+//
+//         // Générer les métadonnées
+//         const metaData = result.metaData ? [...result.metaData] : [];
+//
+//         // Ajouter les métadonnées pour les nouvelles colonnes calculées
+//         if (aggregates && aggregates.length > 0) {
+//             aggregates.forEach(agg => {
+//                 const alias = agg.alias ||
+//                     (agg.type === 'SUM' ? `sum_${agg.columns.join('_')}` :
+//                         agg.type === 'AVG' ? `avg_${agg.columns.join('_')}` :
+//                             `count_${agg.columns.join('_') || 'all'}`);
+//
+//                 metaData.push({
+//                     name: alias,
+//                     dbType: agg.type === 'AVG' ? 'NUMBER' : 'NUMBER',
+//                     precision: agg.type === 'AVG' ? 10 : 10,
+//                     scale: agg.type === 'AVG' ? 2 : 0
+//                 });
+//             });
+//         }
+//
+//         res.json({
+//             success: true,
+//             data: finalResults,
+//             metaData: metaData,
+//             count: finalResults.length
+//         });
+//
+//     } catch (error) {
+//         console.error('Erreur requête:', error);
+//         res.status(500).json({
+//             success: false,
+//             error: error.message
+//         });
+//     } finally {
+//         if (connection) {
+//             try {
+//                 await connection.close();
+//             } catch (error) {
+//                 console.error('Erreur fermeture:', error);
+//             }
+//         }
+//     }
+// });
+
+// Exécuter une requête avec calculs par ligne ET pagination
 app.post('/api/execute-query', async (req, res) => {
-    const { schema, table, columns, filters, sorting, aggregates, limit = 1000 } = req.body;
+    const { schema, table, columns, filters, sorting, aggregates, page = 1, pageSize = 50 } = req.body;
 
     if (!SCHEMAS[schema]) {
         return res.status(400).json({
@@ -205,19 +409,41 @@ app.post('/api/execute-query', async (req, res) => {
             sql += ` ORDER BY ${orderByClauses.join(', ')}`;
         }
 
-        // Ajouter LIMIT (ROWNUM pour Oracle)
-        if (limit) {
-            sql = `SELECT * FROM (${sql}) WHERE ROWNUM <= :limit`;
-            bindParams.limit = limit;
+        // EXÉCUTER LA REQUÊTE POUR LE TOTAL (sans LIMIT)
+        console.log('Requête SQL pour total:', sql);
+
+        // Compter le nombre total de résultats
+        const countResult = await connection.execute(
+            `SELECT COUNT(*) as total_count FROM (${sql})`,
+            bindParams,
+            { outFormat: oracledb.OUT_FORMAT_OBJECT }
+        );
+
+        const totalCount = countResult.rows[0]?.TOTAL_COUNT || 0;
+        const totalPages = Math.ceil(totalCount / pageSize);
+        const offset = (page - 1) * pageSize;
+
+        // Ajouter la pagination (Oracle 12c+ syntax)
+        let paginatedSql = sql;
+        if (pageSize > 0) {
+            paginatedSql = `
+                SELECT * FROM (
+                    SELECT t.*, ROWNUM rnum FROM (
+                        ${sql}
+                    ) t WHERE ROWNUM <= :maxRow
+                ) WHERE rnum > :minRow
+            `;
+
+            bindParams.maxRow = page * pageSize;
+            bindParams.minRow = offset;
         }
 
-        console.log('Requête SQL de base:', sql);
-        console.log('Paramètres:', bindParams);
+        console.log('Requête SQL paginée:', paginatedSql);
+        console.log('Paramètres pagination:', { page, pageSize, offset, totalCount });
 
-        // Exécuter la requête
-        const result = await connection.execute(sql, bindParams, {
-            outFormat: oracledb.OUT_FORMAT_OBJECT,
-            maxRows: limit || 1000
+        // Exécuter la requête paginée
+        const result = await connection.execute(paginatedSql, bindParams, {
+            outFormat: oracledb.OUT_FORMAT_OBJECT
         });
 
         // Appliquer les calculs par LIGNE côté serveur
@@ -310,6 +536,14 @@ app.post('/api/execute-query', async (req, res) => {
             success: true,
             data: finalResults,
             metaData: metaData,
+            pagination: {
+                currentPage: page,
+                pageSize: pageSize,
+                totalCount: totalCount,
+                totalPages: totalPages,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            },
             count: finalResults.length
         });
 

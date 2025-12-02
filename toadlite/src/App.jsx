@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Toast } from "primereact/toast";
 
 import "primereact/resources/themes/lara-light-blue/theme.css";
@@ -21,6 +21,19 @@ export default function App() {
     const [sorting, setSorting] = useState([]);
     const [aggregates, setAggregates] = useState([]);
 
+    // États pour la pagination
+    const [pagination, setPagination] = useState({
+        currentPage: 1,
+        pageSize: 50,
+        totalCount: 0,
+        totalPages: 0,
+        hasNextPage: false,
+        hasPrevPage: false
+    });
+
+    // Options de taille de page
+    const pageSizeOptions = [10, 25, 50, 100, 250, 500];
+
     // États pour les dialogues
     const [showFilterDialog, setShowFilterDialog] = useState(false);
     const [showSortDialog, setShowSortDialog] = useState(false);
@@ -36,10 +49,19 @@ export default function App() {
     });
 
     // États pour la gestion des requêtes sauvegardées
-    const [savedQueries, setSavedQueries] = useState([]);
+    const [savedQueries, setSavedQueries] = useState(() => {
+        // Charger depuis le localStorage au démarrage
+        try {
+            const saved = localStorage.getItem('savedQueries');
+            return saved ? JSON.parse(saved) : [];
+        } catch {
+            return [];
+        }
+    });
     const [showSaveQueryDialog, setShowSaveQueryDialog] = useState(false);
     const [queryName, setQueryName] = useState("");
     const [showLoadQueryDialog, setShowLoadQueryDialog] = useState(false);
+    const [queryDescription, setQueryDescription] = useState("");
 
     // État pour le dropdown des colonnes
     const [showColumnsDropdown, setShowColumnsDropdown] = useState(true);
@@ -161,6 +183,14 @@ export default function App() {
         setSorting([]);
         setAggregates([]);
         setResult([]);
+        setPagination({
+            currentPage: 1,
+            pageSize: 50,
+            totalCount: 0,
+            totalPages: 0,
+            hasNextPage: false,
+            hasPrevPage: false
+        });
         setShowColumnsDropdown(true);
     };
 
@@ -172,6 +202,15 @@ export default function App() {
         setSelectedColumns(tableFields.map(f => f.name));
         setShowColumnsDropdown(true);
         setShowTableDialog(false);
+        // Réinitialiser la pagination
+        setPagination({
+            currentPage: 1,
+            pageSize: 50,
+            totalCount: 0,
+            totalPages: 0,
+            hasNextPage: false,
+            hasPrevPage: false
+        });
 
         toast.current.show({
             severity: 'info',
@@ -280,7 +319,7 @@ export default function App() {
     };
 
     // Exécution de la requête visuelle
-    const executeVisualQuery = async () => {
+    const executeVisualQuery = async (page = 1, newPageSize = null) => {
         if (!selectedTable) {
             toast.current.show({
                 severity: 'warn',
@@ -320,10 +359,11 @@ export default function App() {
                 filters: preparedFilters,
                 sorting: preparedSorting,
                 aggregates: preparedAggregates,
-                limit: 1000
+                page: page,
+                pageSize: newPageSize || pagination.pageSize
             };
 
-            console.log('Envoi au backend:', JSON.stringify(requestBody, null, 2));
+            console.log('Envoi au backend avec pagination:', JSON.stringify(requestBody, null, 2));
 
             const response = await fetch(`${API_BASE_URL}/execute-query`, {
                 method: 'POST',
@@ -337,11 +377,19 @@ export default function App() {
 
             if (result.success) {
                 setResult(result.data);
+                setPagination(result.pagination || {
+                    currentPage: page,
+                    pageSize: newPageSize || pagination.pageSize,
+                    totalCount: result.data.length,
+                    totalPages: 1,
+                    hasNextPage: false,
+                    hasPrevPage: false
+                });
 
                 toast.current.show({
                     severity: 'success',
                     summary: 'Requête exécutée',
-                    detail: `${result.count} résultat(s) trouvé(s)`
+                    detail: `${result.pagination?.totalCount || result.data.length} résultat(s) trouvé(s) - Page ${page}`
                 });
             } else {
                 throw new Error(result.error);
@@ -358,6 +406,21 @@ export default function App() {
         }
     };
 
+    // Navigation de pagination
+    const goToPage = (page) => {
+        if (page < 1 || page > pagination.totalPages) return;
+        executeVisualQuery(page);
+    };
+
+    const changePageSize = (size) => {
+        setPagination(prev => ({
+            ...prev,
+            pageSize: size,
+            currentPage: 1 // Retour à la première page
+        }));
+        executeVisualQuery(1, size);
+    };
+
     // Réinitialisation
     const resetQuery = () => {
         setSelectedTable(null);
@@ -366,6 +429,14 @@ export default function App() {
         setSorting([]);
         setAggregates([]);
         setResult([]);
+        setPagination({
+            currentPage: 1,
+            pageSize: 50,
+            totalCount: 0,
+            totalPages: 0,
+            hasNextPage: false,
+            hasPrevPage: false
+        });
         setShowColumnsDropdown(true);
     };
 
@@ -402,6 +473,81 @@ export default function App() {
         }
     };
 
+    // Calculer les pages à afficher dans la pagination
+    const getVisiblePages = () => {
+        const { currentPage, totalPages } = pagination;
+        const delta = 2;
+        const range = [];
+        const rangeWithDots = [];
+        let l;
+
+        for (let i = 1; i <= totalPages; i++) {
+            if (i === 1 || i === totalPages || (i >= currentPage - delta && i <= currentPage + delta)) {
+                range.push(i);
+            }
+        }
+
+        range.forEach((i) => {
+            if (l) {
+                if (i - l === 2) {
+                    rangeWithDots.push(l + 1);
+                } else if (i - l !== 1) {
+                    rangeWithDots.push('...');
+                }
+            }
+            rangeWithDots.push(i);
+            l = i;
+        });
+
+        return rangeWithDots;
+    };
+
+    // Fonctions pour l'export/import des requêtes
+    const exportQueries = () => {
+        const dataStr = JSON.stringify(savedQueries, null, 2);
+        const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+
+        const exportFileDefaultName = `requetes_sauvegardees_${new Date().toISOString().split('T')[0]}.json`;
+
+        const linkElement = document.createElement('a');
+        linkElement.setAttribute('href', dataUri);
+        linkElement.setAttribute('download', exportFileDefaultName);
+        linkElement.click();
+    };
+
+    const importQueries = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const imported = JSON.parse(e.target.result);
+                if (Array.isArray(imported)) {
+                    setSavedQueries(imported);
+                    localStorage.setItem('savedQueries', JSON.stringify(imported));
+                    toast.current.show({
+                        severity: 'success',
+                        summary: 'Import réussi',
+                        detail: `${imported.length} requête(s) importée(s)`
+                    });
+                } else {
+                    throw new Error('Format invalide');
+                }
+            } catch (error) {
+                toast.current.show({
+                    severity: 'error',
+                    summary: 'Erreur d\'import',
+                    detail: 'Le fichier n\'est pas valide'
+                });
+            }
+        };
+        reader.readAsText(file);
+
+        // Reset le input file
+        event.target.value = '';
+    };
+
     return (
         <div className="app-container vh-100 vw-100 bg-light">
             <Toast ref={toast} position="top-right" />
@@ -425,6 +571,14 @@ export default function App() {
                             >
                                 <i className="pi pi-folder me-1"></i>
                                 Mes requêtes
+                            </button>
+                            <button
+                                className="btn btn-primary btn-sm"
+                                onClick={() => setShowSaveQueryDialog(true)}
+                                disabled={!selectedTable || result.length === 0}
+                            >
+                                <i className="pi pi-save me-1"></i>
+                                Sauvegarder
                             </button>
                         </div>
                     </div>
@@ -754,7 +908,7 @@ export default function App() {
                                                 <div className="col-6">
                                                     <button
                                                         className="btn btn-success w-100"
-                                                        onClick={executeVisualQuery}
+                                                        onClick={() => executeVisualQuery(1)}
                                                         disabled={loading}
                                                     >
                                                         {loading ? (
@@ -778,7 +932,7 @@ export default function App() {
 
                             {/* Zone de résultats */}
                             <div className="col-md-8 col-lg-9">
-                                <div className="card shadow-sm h-100">
+                                <div className="card shadow-sm h-100 d-flex flex-column">
                                     <div className="card-header bg-white border-bottom">
                                         <div className="d-flex justify-content-between align-items-center">
                                             <h5 className="mb-0">
@@ -803,90 +957,169 @@ export default function App() {
                                             </div>
                                         </div>
                                     </div>
-                                    <div className="card-body p-0 position-relative">
+                                    <div className="card-body p-0 position-relative flex-grow-1">
                                         {loading ? (
-                                            <div className="d-flex justify-content-center align-items-center py-5">
-                                                <div className="spinner-border text-primary" role="status">
-                                                    <span className="visually-hidden">Chargement...</span>
+                                            <div className="d-flex justify-content-center align-items-center h-100">
+                                                <div className="text-center">
+                                                    <div className="spinner-border text-primary" role="status" style={{ width: '3rem', height: '3rem' }}>
+                                                        <span className="visually-hidden">Chargement...</span>
+                                                    </div>
+                                                    <p className="mt-3 text-muted">Chargement des données...</p>
                                                 </div>
                                             </div>
                                         ) : result.length > 0 ? (
-                                            <div className="table-responsive" style={{ maxHeight: '70vh' }}>
-                                                <table className="table table-hover table-striped mb-0">
-                                                    <thead className="table-light sticky-top">
-                                                    <tr>
-                                                        {result[0] && Object.keys(result[0]).map(key => {
-                                                            const isCalculated = aggregates.some(agg => {
-                                                                const generatedAlias = agg.type === 'SUM' ? `sum_${agg.columns.join('_')}` :
-                                                                    agg.type === 'AVG' ? `avg_${agg.columns.join('_')}` :
-                                                                        `count_${agg.columns.join('_') || 'all'}`;
+                                            <>
+                                                <div className="table-responsive" style={{ height: 'calc(100% - 70px)', maxHeight: '60vh' }}>
+                                                    <table className="table table-hover table-striped mb-0">
+                                                        <thead className="table-light sticky-top">
+                                                        <tr>
+                                                            {result[0] && Object.keys(result[0]).map(key => {
+                                                                const isCalculated = aggregates.some(agg => {
+                                                                    const generatedAlias = agg.type === 'SUM' ? `sum_${agg.columns.join('_')}` :
+                                                                        agg.type === 'AVG' ? `avg_${agg.columns.join('_')}` :
+                                                                            `count_${agg.columns.join('_') || 'all'}`;
 
-                                                                return key === (agg.alias || generatedAlias);
-                                                            });
+                                                                    return key === (agg.alias || generatedAlias);
+                                                                });
 
-                                                            return (
-                                                                <th key={key} className="text-nowrap">
-                                                                    <div className="d-flex align-items-center">
-                                                                        {formatColumnLabel(key)}
+                                                                return (
+                                                                    <th key={key} className="text-nowrap">
+                                                                        <div className="d-flex align-items-center">
+                                                                            {formatColumnLabel(key)}
+                                                                            {isCalculated && (
+                                                                                <span className="ms-1 badge bg-success" style={{ fontSize: '0.6rem' }}>
+                                                                                    <i className="pi pi-calculator"></i>
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
                                                                         {isCalculated && (
-                                                                            <span className="ms-1 badge bg-success" style={{ fontSize: '0.6rem' }}>
-                                                                                <i className="pi pi-calculator"></i>
-                                                                            </span>
+                                                                            <small className="d-block text-muted" style={{ fontSize: '0.7rem' }}>
+                                                                                {getAggregateLabelForColumn(key)}
+                                                                            </small>
                                                                         )}
-                                                                    </div>
-                                                                    {isCalculated && (
-                                                                        <small className="d-block text-muted" style={{ fontSize: '0.7rem' }}>
-                                                                            {getAggregateLabelForColumn(key)}
-                                                                        </small>
-                                                                    )}
-                                                                </th>
-                                                            );
-                                                        })}
-                                                    </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                    {result.map((row, index) => (
-                                                        <tr key={index}>
-                                                            {Object.values(row).map((value, colIndex) => (
-                                                                <td key={colIndex} className="text-nowrap">
-                                                                    {formatValue(value)}
-                                                                </td>
-                                                            ))}
+                                                                    </th>
+                                                                );
+                                                            })}
                                                         </tr>
-                                                    ))}
-                                                    </tbody>
-                                                </table>
-                                            </div>
+                                                        </thead>
+                                                        <tbody>
+                                                        {result.map((row, index) => (
+                                                            <tr key={index}>
+                                                                {Object.values(row).map((value, colIndex) => (
+                                                                    <td key={colIndex} className="text-nowrap">
+                                                                        {formatValue(value)}
+                                                                    </td>
+                                                                ))}
+                                                            </tr>
+                                                        ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+
+                                                {/* Pagination */}
+                                                <div className="border-top bg-white">
+                                                    <div className="d-flex justify-content-between align-items-center p-3">
+                                                        <div className="d-flex align-items-center">
+                                                            <span className="text-muted me-3">
+                                                                Affichage de <strong>{(pagination.currentPage - 1) * pagination.pageSize + 1}</strong> à <strong>{Math.min(pagination.currentPage * pagination.pageSize, pagination.totalCount)}</strong> sur <strong>{pagination.totalCount.toLocaleString('fr-FR')}</strong> résultats
+                                                            </span>
+
+                                                            <div className="d-flex align-items-center me-3">
+                                                                <label className="form-label mb-0 me-2">Lignes par page:</label>
+                                                                <select
+                                                                    className="form-select form-select-sm w-auto"
+                                                                    value={pagination.pageSize}
+                                                                    onChange={(e) => changePageSize(parseInt(e.target.value))}
+                                                                >
+                                                                    {pageSizeOptions.map(size => (
+                                                                        <option key={size} value={size}>{size}</option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
+                                                        </div>
+
+                                                        <nav aria-label="Pagination">
+                                                            <ul className="pagination pagination-sm mb-0">
+                                                                <li className={`page-item ${!pagination.hasPrevPage ? 'disabled' : ''}`}>
+                                                                    <button
+                                                                        className="page-link"
+                                                                        onClick={() => goToPage(1)}
+                                                                        disabled={!pagination.hasPrevPage}
+                                                                    >
+                                                                        <i className="pi pi-angle-double-left"></i>
+                                                                    </button>
+                                                                </li>
+                                                                <li className={`page-item ${!pagination.hasPrevPage ? 'disabled' : ''}`}>
+                                                                    <button
+                                                                        className="page-link"
+                                                                        onClick={() => goToPage(pagination.currentPage - 1)}
+                                                                        disabled={!pagination.hasPrevPage}
+                                                                    >
+                                                                        <i className="pi pi-angle-left"></i>
+                                                                    </button>
+                                                                </li>
+
+                                                                {getVisiblePages().map((pageNum, index) => (
+                                                                    <li
+                                                                        key={index}
+                                                                        className={`page-item ${pageNum === '...' ? 'disabled' : ''} ${pageNum === pagination.currentPage ? 'active' : ''}`}
+                                                                    >
+                                                                        {pageNum === '...' ? (
+                                                                            <span className="page-link">...</span>
+                                                                        ) : (
+                                                                            <button
+                                                                                className="page-link"
+                                                                                onClick={() => goToPage(pageNum)}
+                                                                            >
+                                                                                {pageNum}
+                                                                            </button>
+                                                                        )}
+                                                                    </li>
+                                                                ))}
+
+                                                                <li className={`page-item ${!pagination.hasNextPage ? 'disabled' : ''}`}>
+                                                                    <button
+                                                                        className="page-link"
+                                                                        onClick={() => goToPage(pagination.currentPage + 1)}
+                                                                        disabled={!pagination.hasNextPage}
+                                                                    >
+                                                                        <i className="pi pi-angle-right"></i>
+                                                                    </button>
+                                                                </li>
+                                                                <li className={`page-item ${!pagination.hasNextPage ? 'disabled' : ''}`}>
+                                                                    <button
+                                                                        className="page-link"
+                                                                        onClick={() => goToPage(pagination.totalPages)}
+                                                                        disabled={!pagination.hasNextPage}
+                                                                    >
+                                                                        <i className="pi pi-angle-double-right"></i>
+                                                                    </button>
+                                                                </li>
+                                                            </ul>
+                                                        </nav>
+                                                    </div>
+                                                </div>
+                                            </>
                                         ) : (
-                                            <div className="text-center py-5">
+                                            <div className="text-center py-5 h-100 d-flex flex-column justify-content-center">
                                                 <i className="pi pi-chart-line text-muted mb-3" style={{ fontSize: '3rem' }}></i>
                                                 <h5 className="text-muted mb-2">Aucun résultat à afficher</h5>
                                                 <p className="text-muted mb-3">
                                                     Configurez votre requête et cliquez sur "Exécuter"
                                                 </p>
-                                                <button
-                                                    className="btn btn-primary"
-                                                    onClick={executeVisualQuery}
-                                                    disabled={loading}
-                                                >
-                                                    <i className="pi pi-play me-2"></i>
-                                                    Exécuter la requête
-                                                </button>
+                                               <div className="text-center">
+                                                   <button
+                                                       className="btn btn-success w-50"
+                                                       onClick={() => executeVisualQuery(1)}
+                                                       disabled={loading}
+                                                   >
+                                                       <i className="pi pi-play me-2"></i>
+                                                       Exécuter la requête
+                                                   </button>
+                                               </div>
                                             </div>
                                         )}
                                     </div>
-                                    {result.length > 0 && (
-                                        <div className="card-footer bg-white border-top">
-                                            <div className="d-flex justify-content-between align-items-center">
-                                                <small className="text-muted">
-                                                    {result.length} ligne(s) affichée(s)
-                                                </small>
-                                                <small className="text-muted">
-                                                    {aggregates.length > 0 && `${aggregates.length} calcul(s) appliqué(s)`}
-                                                </small>
-                                            </div>
-                                        </div>
-                                    )}
                                 </div>
                             </div>
                         </div>
@@ -1307,6 +1540,296 @@ export default function App() {
                                 >
                                     Ajouter
                                 </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal pour sauvegarder une requête */}
+            {showSaveQueryDialog && (
+                <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h5 className="modal-title">
+                                    <i className="pi pi-save me-2 text-primary"></i>
+                                    Sauvegarder la requête
+                                </h5>
+                                <button type="button" className="btn-close" onClick={() => {
+                                    setShowSaveQueryDialog(false);
+                                    setQueryName("");
+                                    setQueryDescription("");
+                                }}></button>
+                            </div>
+                            <div className="modal-body">
+                                <div className="mb-3">
+                                    <label className="form-label">Nom de la requête *</label>
+                                    <input
+                                        type="text"
+                                        className="form-control"
+                                        value={queryName}
+                                        onChange={(e) => setQueryName(e.target.value)}
+                                        placeholder="Ex: Rapport ventes mensuelles"
+                                        maxLength={100}
+                                    />
+                                    <div className="form-text">
+                                        Donnez un nom descriptif à votre requête
+                                    </div>
+                                </div>
+                                <div className="mb-3">
+                                    <label className="form-label">Description (optionnel)</label>
+                                    <textarea
+                                        className="form-control"
+                                        rows="3"
+                                        value={queryDescription}
+                                        onChange={(e) => setQueryDescription(e.target.value)}
+                                        placeholder="Décrivez le but de cette requête..."
+                                        maxLength={500}
+                                    />
+                                </div>
+                                <div className="alert alert-info">
+                                    <i className="pi pi-info-circle me-2"></i>
+                                    <small>
+                                        La requête sera sauvegardée dans votre navigateur (localStorage).
+                                        Elle contiendra la table, les colonnes, filtres, tris et calculs sélectionnés.
+                                    </small>
+                                </div>
+                                <div className="small text-muted">
+                                    <strong>Détails de la requête :</strong><br />
+                                    • Base: {businessDatabases[selectedDb]?.name}<br />
+                                    • Table: {businessDatabases[selectedDb]?.tables[selectedTable]?.name}<br />
+                                    • Colonnes: {selectedColumns.length}<br />
+                                    • Filtres: {filters.length}<br />
+                                    • Tris: {sorting.length}<br />
+                                    • Calculs: {aggregates.length}
+                                </div>
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={() => {
+                                    setShowSaveQueryDialog(false);
+                                    setQueryName("");
+                                    setQueryDescription("");
+                                }}>
+                                    Annuler
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={() => {
+                                        if (!queryName.trim()) {
+                                            toast.current.show({
+                                                severity: 'warn',
+                                                summary: 'Nom manquant',
+                                                detail: 'Veuillez donner un nom à votre requête'
+                                            });
+                                            return;
+                                        }
+
+                                        const newQuery = {
+                                            id: `query_${Date.now()}`,
+                                            name: queryName,
+                                            description: queryDescription,
+                                            date: new Date().toISOString(),
+                                            schema: selectedDb,
+                                            table: selectedTable,
+                                            columns: [...selectedColumns],
+                                            filters: [...filters],
+                                            sorting: [...sorting],
+                                            aggregates: [...aggregates],
+                                            resultCount: result.length,
+                                            pagination: { ...pagination }
+                                        };
+
+                                        // Sauvegarder dans le localStorage
+                                        const updatedQueries = [...savedQueries, newQuery];
+                                        setSavedQueries(updatedQueries);
+                                        localStorage.setItem('savedQueries', JSON.stringify(updatedQueries));
+
+                                        setShowSaveQueryDialog(false);
+                                        setQueryName("");
+                                        setQueryDescription("");
+
+                                        toast.current.show({
+                                            severity: 'success',
+                                            summary: 'Requête sauvegardée',
+                                            detail: `"${queryName}" a été sauvegardée`
+                                        });
+                                    }}
+                                >
+                                    <i className="pi pi-save me-1"></i>
+                                    Sauvegarder
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal pour charger une requête */}
+            {showLoadQueryDialog && (
+                <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog modal-lg">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h5 className="modal-title">
+                                    <i className="pi pi-folder me-2 text-primary"></i>
+                                    Mes requêtes sauvegardées
+                                </h5>
+                                <button type="button" className="btn-close" onClick={() => setShowLoadQueryDialog(false)}></button>
+                            </div>
+                            <div className="modal-body">
+                                {savedQueries.length === 0 ? (
+                                    <div className="text-center py-5">
+                                        <i className="pi pi-inbox text-muted mb-3" style={{ fontSize: '3rem' }}></i>
+                                        <h5 className="text-muted mb-2">Aucune requête sauvegardée</h5>
+                                        <p className="text-muted">
+                                            Créez et sauvegardez des requêtes pour les retrouver ici
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div className="list-group">
+                                        {savedQueries.map((query, index) => (
+                                            <div key={query.id} className="list-group-item list-group-item-action query-list-item">
+                                                <div className="d-flex justify-content-between align-items-start">
+                                                    <div className="flex-grow-1">
+                                                        <div className="d-flex align-items-center mb-1">
+                                                            <i className="pi pi-file text-primary me-2"></i>
+                                                            <h6 className="mb-0 fw-bold">{query.name}</h6>
+                                                            <span className="badge bg-secondary ms-2">
+                                                                {businessDatabases[query.schema]?.name || query.schema}
+                                                            </span>
+                                                        </div>
+                                                        {query.description && (
+                                                            <p className="small text-muted mb-2">{query.description}</p>
+                                                        )}
+                                                        <div className="small text-muted mb-2">
+                                                            <i className="pi pi-table me-1"></i>
+                                                            Table: {businessDatabases[query.schema]?.tables[query.table]?.name || query.table}
+                                                            • {query.columns?.length || 0} colonnes
+                                                            • {query.filters?.length || 0} filtres
+                                                            • {query.sorting?.length || 0} tris
+                                                            • {query.aggregates?.length || 0} calculs
+                                                            {query.resultCount > 0 && ` • ${query.resultCount} résultats`}
+                                                        </div>
+                                                        <div className="small text-muted">
+                                                            <i className="pi pi-calendar me-1"></i>
+                                                            Sauvegardé le {new Date(query.date).toLocaleDateString('fr-FR')} à {new Date(query.date).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                                                        </div>
+                                                    </div>
+                                                    <div className="d-flex flex-column gap-1 ms-3 query-actions">
+                                                        <button
+                                                            className="btn btn-sm btn-outline-primary"
+                                                            onClick={() => {
+                                                                // Charger la requête
+                                                                if (query.schema !== selectedDb) {
+                                                                    setSelectedDb(query.schema);
+                                                                    toast.current.show({
+                                                                        severity: 'info',
+                                                                        summary: 'Base modifiée',
+                                                                        detail: `Changement vers ${businessDatabases[query.schema]?.name}`
+                                                                    });
+                                                                }
+
+                                                                setSelectedTable(query.table);
+                                                                setSelectedColumns(query.columns || []);
+                                                                setFilters(query.filters || []);
+                                                                setSorting(query.sorting || []);
+                                                                setAggregates(query.aggregates || []);
+                                                                setPagination({
+                                                                    currentPage: 1,
+                                                                    pageSize: 50,
+                                                                    totalCount: 0,
+                                                                    totalPages: 0,
+                                                                    hasNextPage: false,
+                                                                    hasPrevPage: false
+                                                                });
+                                                                setResult([]);
+                                                                setShowLoadQueryDialog(false);
+
+                                                                toast.current.show({
+                                                                    severity: 'success',
+                                                                    summary: 'Requête chargée',
+                                                                    detail: `"${query.name}" a été chargée`
+                                                                });
+                                                            }}
+                                                        >
+                                                            <i className="pi pi-play me-1"></i> Charger
+                                                        </button>
+                                                        <button
+                                                            className="btn btn-sm btn-outline-danger"
+                                                            onClick={() => {
+                                                                // Supprimer la requête
+                                                                const updatedQueries = savedQueries.filter((_, i) => i !== index);
+                                                                setSavedQueries(updatedQueries);
+                                                                localStorage.setItem('savedQueries', JSON.stringify(updatedQueries));
+
+                                                                toast.current.show({
+                                                                    severity: 'info',
+                                                                    summary: 'Requête supprimée',
+                                                                    detail: `"${query.name}" a été supprimée`
+                                                                });
+                                                            }}
+                                                        >
+                                                            <i className="pi pi-trash me-1"></i> Supprimer
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="modal-footer">
+                                <div className="d-flex justify-content-between w-100">
+                                    <div className="d-flex gap-2">
+                                        <button
+                                            type="button"
+                                            className="btn btn-outline-success btn-sm"
+                                            onClick={exportQueries}
+                                            disabled={savedQueries.length === 0}
+                                        >
+                                            <i className="pi pi-download me-1"></i>
+                                            Exporter
+                                        </button>
+                                        <label className="btn btn-outline-info btn-sm mb-0">
+                                            <i className="pi pi-upload me-1"></i>
+                                            Importer
+                                            <input
+                                                type="file"
+                                                accept=".json"
+                                                onChange={importQueries}
+                                                style={{ display: 'none' }}
+                                            />
+                                        </label>
+                                    </div>
+                                    <div className="d-flex gap-2">
+                                        <button type="button" className="btn btn-secondary" onClick={() => setShowLoadQueryDialog(false)}>
+                                            Fermer
+                                        </button>
+                                        {savedQueries.length > 0 && (
+                                            <button
+                                                type="button"
+                                                className="btn btn-outline-danger"
+                                                onClick={() => {
+                                                    if (window.confirm('Voulez-vous vraiment supprimer toutes les requêtes sauvegardées ?')) {
+                                                        setSavedQueries([]);
+                                                        localStorage.removeItem('savedQueries');
+                                                        setShowLoadQueryDialog(false);
+                                                        toast.current.show({
+                                                            severity: 'success',
+                                                            summary: 'Toutes les requêtes supprimées',
+                                                            detail: 'Le cache a été vidé'
+                                                        });
+                                                    }
+                                                }}
+                                            >
+                                                <i className="pi pi-trash me-1"></i>
+                                                Tout supprimer
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
