@@ -454,3 +454,145 @@
         padding: 12px 8px;
     }
 }
+/* Style minimaliste pour les éléments de table */
+.table-item {
+    border: 1px solid #e9ecef;
+    background: white;
+}
+
+.table-item:hover {
+    background-color: #e7f1ff !important;
+    border-color: #0d6efd !important;
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(13, 110, 253, 0.2);
+}
+
+.table-item:hover i {
+    color: #0d6efd !important;
+}
+
+/* Effet de focus pour l'accessibilité */
+.table-item:focus {
+    outline: 2px solid #0d6efd;
+    outline-offset: 2px;
+}
+
+/* Responsive */
+@media (max-width: 576px) {
+    .modal-dialog {
+        margin: 10px;
+    }
+
+    .table-item {
+        padding: 1rem !important;
+    }
+
+    .table-item i {
+        font-size: 1.8rem !important;
+    }
+}
+
+/* Styles pour les cartes de table avec tooltip qui sort */
+.table-selector-card {
+    transition: all 0.2s ease-in-out;
+    background-color: #ffffff;
+    position: relative;
+    z-index: 1;
+}
+
+.table-selector-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    border-color: #0d6efd !important;
+    background-color: #f8f9fa;
+    z-index: 1000; /* Important pour que le tooltip soit au-dessus des autres cartes */
+}
+
+.table-selector-card:hover i {
+    color: #0d6efd !important;
+    transform: scale(1.1);
+    transition: all 0.2s ease;
+}
+
+.table-selector-card:hover small {
+    color: #0d6efd !important;
+}
+
+/* Tooltip qui sort du carré */
+.table-tooltip {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(10px);
+    background-color: #333;
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    z-index: 1001;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    min-width: max-content;
+    max-width: 300px;
+    text-align: center;
+
+    /* Empêcher le texte de déborder */
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Flèche du tooltip */
+.table-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: #333 transparent transparent transparent;
+}
+
+/* Affichage du tooltip au hover */
+.table-selector-card:hover .table-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(-5px);
+}
+
+/* Animation pour les icônes de table */
+.table-selector-card i {
+    transition: all 0.2s ease;
+}
+
+/* Responsive pour les tooltips */
+@media (max-width: 768px) {
+    .table-selector-card {
+        aspect-ratio: 1/0.9;
+    }
+
+    .table-selector-card i {
+        font-size: 1.8rem !important;
+    }
+
+    .table-tooltip {
+        font-size: 0.75rem;
+        padding: 6px 10px;
+        max-width: 200px;
+        white-space: normal;
+        word-break: break-word;
+    }
+
+    .table-selector-card small {
+        font-size: 0.7rem !important;
+    }
+}
+
+/* Ajustement pour les bords du modal */
+.modal-body {
+    overflow: visible !important;
+}

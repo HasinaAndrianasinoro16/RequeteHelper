@@ -1203,33 +1203,64 @@ export default function App() {
                                 <button type="button" className="btn-close" onClick={() => setShowTableDialog(false)}></button>
                             </div>
                             <div className="modal-body">
-                                <div className="row g-3">
-                                    {Object.entries(businessDatabases[selectedDb]?.tables || {}).map(([key, table]) => (
-                                        <div key={key} className="col-md-6">
-                                            <div
-                                                className="card h-100 cursor-pointer hover-shadow"
-                                                onClick={() => handleTableSelect(key)}
-                                                style={{ cursor: 'pointer' }}
-                                            >
-                                                <div className="card-body">
-                                                    <div className="d-flex align-items-start">
-                                                        <i className="pi pi-table text-primary me-3 mt-1"></i>
-                                                        <div>
-                                                            <h6 className="card-title mb-1">{table.name}</h6>
-                                                            <p className="card-text text-muted small mb-1">{table.description}</p>
-                                                            <small className="text-muted">{table.fields?.length || 0} colonnes</small>
+                                {Object.keys(businessDatabases[selectedDb]?.tables || {}).length === 0 ? (
+                                    <div className="text-center py-5">
+                                        <i className="pi pi-database text-muted mb-3" style={{ fontSize: '3rem' }}></i>
+                                        <h5 className="text-muted mb-2">Aucune table disponible</h5>
+                                        <p className="text-muted">
+                                            La base de données ne contient pas de tables accessibles.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div className="row g-3">
+                                        {Object.entries(businessDatabases[selectedDb]?.tables || {}).map(([key, table]) => (
+                                            <div key={key} className="col-4 col-md-3 col-lg-2">
+                                                <div
+                                                    className="table-selector-card card text-center cursor-pointer position-relative"
+                                                    onClick={() => handleTableSelect(key)}
+                                                    style={{
+                                                        cursor: 'pointer',
+                                                        aspectRatio: '1/1',
+                                                        border: '1px solid #dee2e6',
+                                                        overflow: 'visible'
+                                                    }}
+                                                >
+                                                    <div className="card-body p-2 d-flex flex-column align-items-center justify-content-center">
+                                                        <div className="mb-2">
+                                                            <i className="pi pi-table text-primary" style={{ fontSize: '2.2rem' }}></i>
+                                                        </div>
+                                                        <div className="mt-auto w-100 position-relative">
+                                                            <small className="text-dark text-truncate d-block fw-medium"
+                                                                   style={{
+                                                                       fontSize: '0.75rem',
+                                                                       maxWidth: '100%',
+                                                                       lineHeight: '1.1'
+                                                                   }}>
+                                                                {table.name}
+                                                            </small>
+
+                                                            {/* Tooltip qui sort du carré */}
+                                                            <div className="table-tooltip">
+                                                                {table.name}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    ))}
-                                </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                             <div className="modal-footer">
-                                <button type="button" className="btn btn-secondary" onClick={() => setShowTableDialog(false)}>
-                                    Annuler
-                                </button>
+                                <div className="d-flex justify-content-between w-100 align-items-center">
+                                    <div className="text-muted small">
+                                        <i className="pi pi-info-circle me-1"></i>
+                                        {Object.keys(businessDatabases[selectedDb]?.tables || {}).length} table(s) - Survolez pour voir les noms complets
+                                    </div>
+                                    <button type="button" className="btn btn-secondary" onClick={() => setShowTableDialog(false)}>
+                                        Annuler
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
