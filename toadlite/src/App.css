@@ -1,0 +1,104 @@
+/* Styles pour les calculs avancés */
+.aggregate-badge {
+    background-color: #198754 !important;
+    color: white !important;
+    border: none;
+}
+
+.aggregate-item {
+    transition: all 0.2s ease;
+}
+
+.aggregate-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Styles pour les colonnes numériques */
+.numeric-column {
+    color: #0d6efd;
+    font-weight: 600;
+}
+
+/* Amélioration de l'interface des dialogues */
+.aggregate-columns-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 10px;
+}
+
+/* Indicateur visuel pour les colonnes sélectionnées */
+.column-selected {
+    background-color: #e8f4fd;
+    border-left: 4px solid #0d6efd;
+}
+
+/* Cartes KPI pour les calculs */
+.kpi-card {
+    border: 2px solid #0d6efd;
+    transition: all 0.3s ease;
+    min-height: 150px;
+}
+
+.kpi-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(0, 110, 253, 0.2);
+}
+
+.kpi-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #0d6efd;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Badge pour les colonnes numériques dans les listes */
+.numeric-badge {
+    background-color: #0d6efd !important;
+    color: white !important;
+    font-size: 0.7em;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 5px;
+}
+
+/* Animation pour les nouveaux calculs */
+@keyframes highlight {
+    0% { background-color: #e8f4fd; }
+    100% { background-color: transparent; }
+}
+
+.highlight {
+    animation: highlight 2s ease;
+}
+
+/* Amélioration de l'affichage des résultats */
+.aggregate-result {
+    font-weight: bold;
+    color: #198754;
+}
+
+/* Styles pour les boutons */
+.btn-calculate {
+    background: linear-gradient(135deg, #0d6efd, #0dcaf0);
+    border: none;
+    color: white;
+}
+
+.btn-calculate:hover {
+    background: linear-gradient(135deg, #0b5ed7, #0bb8e0);
+    color: white;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .aggregate-columns-list {
+        max-height: 200px;
+    }
+
+    .kpi-value {
+        font-size: 2rem;
+    }
+}
