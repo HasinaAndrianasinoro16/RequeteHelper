@@ -27,6 +27,73 @@ const SCHEMAS = {
     }
 };
 
+// Dans server.js, ajoutez cette route pour détecter les schémas
+app.get('/api/databases', async (req, res) => {
+    let connection;
+    try {
+        // Essayez de vous connecter avec un utilisateur qui peut voir les schémas
+        // (vous devrez peut-être ajuster les credentials)
+        const adminConfig = {
+            user: 'system',
+            password: 'OraHasina123',
+            connectString: '10.200.222.123:1521/ORCL_PRI'
+        };
+
+        connection = await oracledb.getConnection(adminConfig);
+
+        // Requête pour obtenir les schémas disponibles
+        const result = await connection.execute(`
+            SELECT username 
+            FROM dba_users 
+            WHERE account_status = 'OPEN' 
+            AND username NOT IN ('SYS', 'SYSTEM', 'DBSNMP', 'XDB', 'CTXSYS', 'MDSYS', 'ORDDATA', 'ORDSYS', 'OUTLN', 'WMSYS')
+            ORDER BY username
+        `, {}, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+        // Alternative: si vous n'avez pas les droits DBA, utilisez all_users
+        /*
+        const result = await connection.execute(`
+            SELECT username
+            FROM all_users
+            WHERE username NOT IN ('SYS', 'SYSTEM')
+            ORDER BY username
+        `, {}, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        */
+
+        const schemas = result.rows.map(row => ({
+            name: row.USERNAME,
+            value: row.USERNAME,
+            description: `Schéma ${row.USERNAME}`
+        }));
+
+        res.json({
+            success: true,
+            databases: schemas
+        });
+
+    } catch (error) {
+        console.error('Erreur détection schémas:', error);
+
+        // Fallback: retourner les schémas configurés
+        res.json({
+            success: true,
+            databases: Object.entries(SCHEMAS).map(([key, config]) => ({
+                name: key,
+                value: key,
+                description: config.description || `Schéma ${key}`
+            }))
+        });
+    } finally {
+        if (connection) {
+            try {
+                await connection.close();
+            } catch (error) {
+                console.error('Erreur fermeture:', error);
+            }
+        }
+    }
+});
+
 // Test de connexion
 app.post('/api/test-connection', async (req, res) => {
     const { schema } = req.body;
@@ -656,6 +723,7 @@ app.listen(PORT, () => {
     console.log('   GET  /api/tables/:schema');
     console.log('   POST /api/execute-query');
     console.log('   GET  /api/sample-data/:schema/:table');
+    console.log('   GET  /api/databases');
 });
 
 // Gestion propre de la fermeture
