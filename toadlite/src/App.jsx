@@ -573,6 +573,130 @@ export default function App() {
         event.target.value = '';
     };
 
+    // Fonction pour sauvegarder la requête actuelle
+    const saveCurrentQuery = () => {
+        if (!queryName.trim()) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Nom requis',
+                detail: 'Veuillez entrer un nom pour votre requête'
+            });
+            return;
+        }
+
+        const queryData = {
+            id: `query_${Date.now()}`,
+            name: queryName.trim(),
+            description: queryDescription.trim(),
+            timestamp: new Date().toISOString(),
+            config: {
+                username,
+                selectedTable,
+                selectedColumns: [...selectedColumns],
+                filters: filters.map(f => ({
+                    field: f.field,
+                    operator: f.operator,
+                    value: f.value
+                })),
+                sorting: sorting.map(s => ({
+                    field: s.field,
+                    direction: s.direction
+                })),
+                aggregates: aggregates.map(a => ({
+                    type: a.type,
+                    columns: [...a.columns],
+                    alias: a.alias
+                })),
+                pagination: { ...pagination }
+            },
+            lastResults: {
+                rowCount: result.length,
+                timestamp: new Date().toISOString()
+            }
+        };
+
+        const updatedQueries = [...savedQueries, queryData];
+        setSavedQueries(updatedQueries);
+        localStorage.setItem('savedQueries', JSON.stringify(updatedQueries));
+
+        setQueryName("");
+        setQueryDescription("");
+        setShowSaveQueryDialog(false);
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Requête sauvegardée',
+            detail: `"${queryData.name}" a été sauvegardée`
+        });
+    };
+
+// Fonction pour charger une requête sauvegardée
+    const loadSavedQuery = (query) => {
+        console.log('Chargement de la requête:', query);
+
+        // Mettre à jour tous les états avec la configuration sauvegardée
+        setSelectedTable(query.config.selectedTable);
+        setSelectedColumns([...query.config.selectedColumns]);
+        setFilters(query.config.filters.map(f => ({
+            ...f,
+            id: `filter_${Date.now()}_${Math.random()}`,
+            label: formatColumnLabel(f.field)
+        })));
+        setSorting(query.config.sorting.map(s => ({
+            ...s,
+            id: `sort_${Date.now()}_${Math.random()}`,
+            label: formatColumnLabel(s.field)
+        })));
+        setAggregates(query.config.aggregates.map(a => ({
+            ...a,
+            id: `agg_${Date.now()}_${Math.random()}`,
+            label: `${a.type === 'SUM' ? 'Somme' : a.type === 'AVG' ? 'Moyenne' : 'Compte'} de ${
+                a.columns.length > 0 ?
+                    a.columns.map(col => formatColumnLabel(col)).join(', ') : 'tous les champs'
+            }`
+        })));
+        setPagination({ ...query.config.pagination });
+
+        setShowLoadQueryDialog(false);
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Requête chargée',
+            detail: `"${query.name}" a été chargée`
+        });
+
+        // Exécuter automatiquement la requête après un délai
+        setTimeout(() => {
+            executeVisualQuery(1);
+        }, 500);
+    };
+
+// Fonction pour supprimer une requête sauvegardée
+    const deleteSavedQuery = (queryId) => {
+        const updatedQueries = savedQueries.filter(q => q.id !== queryId);
+        setSavedQueries(updatedQueries);
+        localStorage.setItem('savedQueries', JSON.stringify(updatedQueries));
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Requête supprimée',
+            detail: 'La requête a été supprimée de vos sauvegardes'
+        });
+    };
+
+// Fonction pour exporter une seule requête
+    const exportSingleQuery = (query) => {
+        const dataStr = JSON.stringify(query, null, 2);
+        const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+        const exportFileName = `requete_${query.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.json`;
+
+        const linkElement = document.createElement('a');
+        linkElement.setAttribute('href', dataUri);
+        linkElement.setAttribute('download', exportFileName);
+        linkElement.click();
+    };
+
+
     return (
         <div className="app-container vh-100 vw-100 bg-light">
             <Toast ref={toast} position="top-right" />
@@ -1546,6 +1670,202 @@ export default function App() {
                                     disabled={!currentAggregate.type || (currentAggregate.type !== 'COUNT' && currentAggregate.columns.length === 0)}
                                 >
                                     Ajouter
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showSaveQueryDialog && (
+                <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h5 className="modal-title">
+                                    <i className="pi pi-save me-2"></i>
+                                    Sauvegarder la requête
+                                </h5>
+                                <button type="button" className="btn-close" onClick={() => setShowSaveQueryDialog(false)}></button>
+                            </div>
+                            <div className="modal-body">
+                                <div className="mb-3">
+                                    <label className="form-label">Nom de la requête *</label>
+                                    <input
+                                        type="text"
+                                        className="form-control"
+                                        value={queryName}
+                                        onChange={(e) => setQueryName(e.target.value)}
+                                        placeholder="Ex: Rapport ventes mensuelles"
+                                        autoFocus
+                                    />
+                                    <small className="text-muted">Donnez un nom significatif à votre requête</small>
+                                </div>
+                                <div className="mb-3">
+                                    <label className="form-label">Description (optionnelle)</label>
+                                    <textarea
+                                        className="form-control"
+                                        value={queryDescription}
+                                        onChange={(e) => setQueryDescription(e.target.value)}
+                                        placeholder="Description de la requête, filtres appliqués, etc."
+                                        rows="3"
+                                    />
+                                </div>
+                                <div className="alert alert-info">
+                                    <i className="pi pi-info-circle me-2"></i>
+                                    <small>
+                                        Cette requête sauvegardera :<br/>
+                                        • Table : <strong>{tables[selectedTable]?.name || selectedTable}</strong><br/>
+                                        • {selectedColumns.length} colonne(s)<br/>
+                                        • {filters.length} filtre(s)<br/>
+                                        • {sorting.length} tri(s)<br/>
+                                        • {aggregates.length} calcul(s)
+                                    </small>
+                                </div>
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={() => setShowSaveQueryDialog(false)}>
+                                    Annuler
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={saveCurrentQuery}
+                                    disabled={!queryName.trim()}
+                                >
+                                    <i className="pi pi-save me-1"></i>
+                                    Sauvegarder
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal pour charger une requête sauvegardée */}
+            {showLoadQueryDialog && (
+                <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog modal-lg">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h5 className="modal-title">
+                                    <i className="pi pi-folder me-2"></i>
+                                    Mes requêtes sauvegardées
+                                </h5>
+                                <button type="button" className="btn-close" onClick={() => setShowLoadQueryDialog(false)}></button>
+                            </div>
+                            <div className="modal-body">
+                                {savedQueries.length === 0 ? (
+                                    <div className="text-center py-5">
+                                        <i className="pi pi-inbox text-muted mb-3" style={{ fontSize: '3rem' }}></i>
+                                        <h5 className="text-muted mb-2">Aucune requête sauvegardée</h5>
+                                        <p className="text-muted">
+                                            Créez et sauvegardez vos premières requêtes pour les retrouver ici.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="d-flex justify-content-between align-items-center mb-3">
+
+                                            <div className="text-muted">
+                                                {savedQueries.length} requête(s) sauvegardée(s)
+                                            </div>
+
+                                            <div className="d-flex align-items-center gap-2">
+
+                                                <button
+                                                    className="btn btn-outline-primary btn-sm d-flex align-items-center"
+                                                    onClick={exportQueries}
+                                                >
+                                                    <i className="pi pi-download me-1"></i>
+                                                    Exporter tout
+                                                </button>
+
+                                                <label className="btn btn-outline-success btn-sm d-flex align-items-center mb-0">
+                                                    <i className="pi pi-upload me-1"></i>
+                                                    Importer
+                                                    <input
+                                                        type="file"
+                                                        accept=".json"
+                                                        onChange={importQueries}
+                                                        style={{ display: 'none' }}
+                                                    />
+                                                </label>
+
+                                            </div>
+
+                                        </div>
+
+
+                                        <div className="list-group">
+                                            {savedQueries.map((query) => (
+                                                <div key={query.id} className="list-group-item">
+                                                    <div className="d-flex justify-content-between align-items-start">
+                                                        <div className="flex-grow-1 me-3">
+                                                            <div className="d-flex align-items-center mb-1">
+                                                                <h6 className="mb-0 me-2">{query.name}</h6>
+                                                                <span className="badge bg-light text-dark">
+                                                        <i className="pi pi-calendar me-1"></i>
+                                                                    {new Date(query.timestamp).toLocaleDateString('fr-FR')}
+                                                    </span>
+                                                            </div>
+                                                            {query.description && (
+                                                                <p className="text-muted small mb-2">{query.description}</p>
+                                                            )}
+                                                            <div className="d-flex flex-wrap gap-2">
+                                                                <small className="badge bg-info">
+                                                                    <i className="pi pi-table me-1"></i>
+                                                                    {query.config.selectedTable}
+                                                                </small>
+                                                                <small className="badge bg-secondary">
+                                                                    <i className="pi pi-list me-1"></i>
+                                                                    {query.config.selectedColumns.length} colonnes
+                                                                </small>
+                                                                {query.config.filters.length > 0 && (
+                                                                    <small className="badge bg-warning">
+                                                                        <i className="pi pi-filter me-1"></i>
+                                                                        {query.config.filters.length} filtre(s)
+                                                                    </small>
+                                                                )}
+                                                                {query.config.aggregates.length > 0 && (
+                                                                    <small className="badge bg-success">
+                                                                        <i className="pi pi-calculator me-1"></i>
+                                                                        {query.config.aggregates.length} calcul(s)
+                                                                    </small>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        <div className="d-flex flex-column gap-1">
+                                                            <button
+                                                                className="btn btn-sm btn-primary"
+                                                                onClick={() => loadSavedQuery(query)}
+                                                            >
+                                                                <i className="pi pi-play"></i>
+                                                            </button>
+                                                            <button
+                                                                className="btn btn-sm btn-outline-secondary"
+                                                                onClick={() => exportSingleQuery(query)}
+                                                                title="Exporter cette requête"
+                                                            >
+                                                                <i className="pi pi-download"></i>
+                                                            </button>
+                                                            <button
+                                                                className="btn btn-sm btn-outline-danger"
+                                                                onClick={() => deleteSavedQuery(query.id)}
+                                                                title="Supprimer cette requête"
+                                                            >
+                                                                <i className="pi pi-trash"></i>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={() => setShowLoadQueryDialog(false)}>
+                                    Fermer
                                 </button>
                             </div>
                         </div>
