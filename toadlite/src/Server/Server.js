@@ -10,115 +10,61 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Configuration Oracle
+// Configuration Oracle (sans credentials par défaut)
 const dbConfig = {
     connectString:'10.200.222.123:1521/ORCL_PRI'
 };
 
-// Schémas de base de données
-const SCHEMAS = {
-    COMPTABILITE: {
-        user: 'comptabilite',
-        password: 'comptabilite123'
-    },
-    VENTES: {
-        user: 'ventes',
-        password: 'ventes123'
-    }
-};
-
-// Dans server.js, ajoutez cette route pour détecter les schémas
-app.get('/api/databases', async (req, res) => {
-    let connection;
-    try {
-        // Essayez de vous connecter avec un utilisateur qui peut voir les schémas
-        // (vous devrez peut-être ajuster les credentials)
-        const adminConfig = {
-            user: 'system',
-            password: 'OraHasina123',
-            connectString: '10.200.222.123:1521/ORCL_PRI'
-        };
-
-        connection = await oracledb.getConnection(adminConfig);
-
-        // Requête pour obtenir les schémas disponibles
-        const result = await connection.execute(`
-            SELECT username 
-            FROM dba_users 
-            WHERE account_status = 'OPEN' 
-            AND username NOT IN ('SYS', 'SYSTEM', 'DBSNMP', 'XDB', 'CTXSYS', 'MDSYS', 'ORDDATA', 'ORDSYS', 'OUTLN', 'WMSYS')
-            ORDER BY username
-        `, {}, { outFormat: oracledb.OUT_FORMAT_OBJECT });
-
-        // Alternative: si vous n'avez pas les droits DBA, utilisez all_users
-        /*
-        const result = await connection.execute(`
-            SELECT username
-            FROM all_users
-            WHERE username NOT IN ('SYS', 'SYSTEM')
-            ORDER BY username
-        `, {}, { outFormat: oracledb.OUT_FORMAT_OBJECT });
-        */
-
-        const schemas = result.rows.map(row => ({
-            name: row.USERNAME,
-            value: row.USERNAME,
-            description: `Schéma ${row.USERNAME}`
-        }));
-
-        res.json({
-            success: true,
-            databases: schemas
-        });
-
-    } catch (error) {
-        console.error('Erreur détection schémas:', error);
-
-        // Fallback: retourner les schémas configurés
-        res.json({
-            success: true,
-            databases: Object.entries(SCHEMAS).map(([key, config]) => ({
-                name: key,
-                value: key,
-                description: config.description || `Schéma ${key}`
-            }))
-        });
-    } finally {
-        if (connection) {
-            try {
-                await connection.close();
-            } catch (error) {
-                console.error('Erreur fermeture:', error);
-            }
-        }
-    }
-});
-
-// Test de connexion
+// Test de connexion avec credentials dynamiques
 app.post('/api/test-connection', async (req, res) => {
-    const { schema } = req.body;
+    const { username, password } = req.body;
 
-    if (!SCHEMAS[schema]) {
+    if (!username || !password) {
         return res.status(400).json({
             success: false,
-            message: `Schéma ${schema} non configuré`
+            message: 'Nom d\'utilisateur et mot de passe requis'
         });
     }
 
     let connection;
     try {
-        const config = { ...SCHEMAS[schema], ...dbConfig };
+        const config = {
+            user: username,
+            password: password,
+            connectString: dbConfig.connectString
+        };
+
         connection = await oracledb.getConnection(config);
+
+        // Test supplémentaire: obtenir le nom de l'utilisateur courant
+        const userResult = await connection.execute(
+            `SELECT USER FROM DUAL`,
+            {},
+            { outFormat: oracledb.OUT_FORMAT_OBJECT }
+        );
 
         res.json({
             success: true,
-            message: `Connexion réussie au schéma ${schema}`
+            message: `Connexion réussie à ${userResult.rows[0].USER}`,
+            username: userResult.rows[0].USER
         });
     } catch (error) {
         console.error('Erreur de connexion:', error);
+
+        let errorMessage = 'Erreur de connexion';
+        if (error.errorNum === 1017) {
+            errorMessage = 'Identifiants incorrects';
+        } else if (error.errorNum === 12541) {
+            errorMessage = 'Serveur Oracle inaccessible';
+        } else if (error.errorNum === 12154) {
+            errorMessage = 'Service Oracle introuvable';
+        } else {
+            errorMessage = error.message;
+        }
+
         res.status(500).json({
             success: false,
-            message: `Erreur de connexion: ${error.message}`
+            message: errorMessage
         });
     } finally {
         if (connection) {
@@ -131,17 +77,22 @@ app.post('/api/test-connection', async (req, res) => {
     }
 });
 
-// Obtenir les métadonnées des tables
-app.get('/api/tables/:schema', async (req, res) => {
-    const { schema } = req.params;
+// Obtenir les métadonnées des tables avec credentials dynamiques
+app.post('/api/tables', async (req, res) => {
+    const { username, password } = req.body;
 
-    if (!SCHEMAS[schema]) {
-        return res.status(400).json({ error: `Schéma ${schema} non configuré` });
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Nom d\'utilisateur et mot de passe requis' });
     }
 
     let connection;
     try {
-        const config = { ...SCHEMAS[schema], ...dbConfig };
+        const config = {
+            user: username,
+            password: password,
+            connectString: dbConfig.connectString
+        };
+
         connection = await oracledb.getConnection(config);
 
         // Récupérer toutes les tables de l'utilisateur
@@ -161,7 +112,10 @@ app.get('/api/tables/:schema', async (req, res) => {
                 SELECT
                     column_name,
                     data_type,
-                    nullable
+                    nullable,
+                    data_length,
+                    data_precision,
+                    data_scale
                 FROM user_tab_columns
                 WHERE table_name = :tableName
                 ORDER BY column_id
@@ -173,7 +127,11 @@ app.get('/api/tables/:schema', async (req, res) => {
                 fields: columnsResult.rows.map(col => ({
                     name: col[0],
                     type: mapOracleType(col[1]),
-                    label: formatColumnLabel(col[0])
+                    label: formatColumnLabel(col[0]),
+                    nullable: col[2] === 'Y',
+                    length: col[3],
+                    precision: col[4],
+                    scale: col[5]
                 }))
             };
         }
@@ -193,224 +151,32 @@ app.get('/api/tables/:schema', async (req, res) => {
     }
 });
 
-// Exécuter une requête avec calculs par ligne
-// app.post('/api/execute-query', async (req, res) => {
-//     const { schema, table, columns, filters, sorting, aggregates, limit = 1000 } = req.body;
-//
-//     if (!SCHEMAS[schema]) {
-//         return res.status(400).json({
-//             success: false,
-//             error: `Schéma ${schema} non configuré`
-//         });
-//     }
-//
-//     let connection;
-//     try {
-//         const config = { ...SCHEMAS[schema], ...dbConfig };
-//         connection = await oracledb.getConnection(config);
-//
-//         // Construire la liste des colonnes SELECT
-//         let selectItems = [];
-//
-//         // 1. Ajouter les colonnes normales (si sélectionnées)
-//         if (columns && columns.length > 0) {
-//             selectItems.push(...columns.map(col => `"${col}"`));
-//         } else {
-//             // Si aucune colonne n'est sélectionnée, prendre toutes les colonnes
-//             const allColumns = await connection.execute(
-//                 `SELECT column_name FROM user_tab_columns WHERE table_name = :tableName ORDER BY column_id`,
-//                 { tableName: table }
-//             );
-//             selectItems.push(...allColumns.rows.map(row => `"${row[0]}"`));
-//         }
-//
-//         // Construire la requête de base
-//         let sql = `SELECT ${selectItems.join(', ')} FROM "${table}"`;
-//         const bindParams = {};
-//
-//         // Ajouter les filtres WHERE
-//         if (filters && filters.length > 0) {
-//             const whereConditions = [];
-//
-//             filters.forEach((filter, index) => {
-//                 if (!filter.field || !filter.operator) return;
-//
-//                 let condition;
-//                 const paramName = `val${index}`;
-//
-//                 switch (filter.operator) {
-//                     case '=':
-//                     case '!=':
-//                     case '>':
-//                     case '<':
-//                     case '>=':
-//                     case '<=':
-//                         condition = `"${filter.field}" ${filter.operator} :${paramName}`;
-//                         bindParams[paramName] = convertValue(filter.value);
-//                         break;
-//                     case 'contient':
-//                         condition = `UPPER("${filter.field}") LIKE UPPER(:${paramName})`;
-//                         bindParams[paramName] = `%${filter.value}%`;
-//                         break;
-//                     default:
-//                         return;
-//                 }
-//
-//                 whereConditions.push(condition);
-//             });
-//
-//             if (whereConditions.length > 0) {
-//                 sql += ` WHERE ${whereConditions.join(' AND ')}`;
-//             }
-//         }
-//
-//         // Ajouter ORDER BY
-//         if (sorting && sorting.length > 0) {
-//             const orderByClauses = sorting.map(sort => {
-//                 return `"${sort.field}" ${sort.direction}`;
-//             });
-//             sql += ` ORDER BY ${orderByClauses.join(', ')}`;
-//         }
-//
-//         // Ajouter LIMIT (ROWNUM pour Oracle)
-//         if (limit) {
-//             sql = `SELECT * FROM (${sql}) WHERE ROWNUM <= :limit`;
-//             bindParams.limit = limit;
-//         }
-//
-//         console.log('Requête SQL de base:', sql);
-//         console.log('Paramètres:', bindParams);
-//
-//         // Exécuter la requête
-//         const result = await connection.execute(sql, bindParams, {
-//             outFormat: oracledb.OUT_FORMAT_OBJECT,
-//             maxRows: limit || 1000
-//         });
-//
-//         // Appliquer les calculs par LIGNE côté serveur
-//         let finalResults = result.rows;
-//
-//         if (aggregates && aggregates.length > 0) {
-//             finalResults = result.rows.map(row => {
-//                 const newRow = { ...row };
-//
-//                 aggregates.forEach(agg => {
-//                     if (agg.type === 'SUM') {
-//                         // Calculer la somme des colonnes sélectionnées pour chaque ligne
-//                         let sum = 0;
-//                         let hasValidValues = false;
-//
-//                         agg.columns.forEach(col => {
-//                             const value = row[col];
-//                             if (value !== null && value !== undefined && !isNaN(value)) {
-//                                 sum += parseFloat(value);
-//                                 hasValidValues = true;
-//                             }
-//                         });
-//
-//                         newRow[agg.alias || `sum_${agg.columns.join('_')}`] = hasValidValues ? sum : null;
-//                     }
-//                     else if (agg.type === 'AVG') {
-//                         // Calculer la moyenne des colonnes sélectionnées pour chaque ligne
-//                         let sum = 0;
-//                         let count = 0;
-//
-//                         agg.columns.forEach(col => {
-//                             const value = row[col];
-//                             if (value !== null && value !== undefined && !isNaN(value)) {
-//                                 sum += parseFloat(value);
-//                                 count++;
-//                             }
-//                         });
-//
-//                         const avg = count > 0 ? sum / count : null;
-//                         newRow[agg.alias || `avg_${agg.columns.join('_')}`] = avg;
-//                     }
-//                     else if (agg.type === 'COUNT') {
-//                         // Compter le nombre de colonnes non-nulles pour chaque ligne
-//                         let count = 0;
-//
-//                         if (agg.columns.length === 0) {
-//                             // COUNT(*) - compter toutes les colonnes non-nulles
-//                             Object.keys(row).forEach(key => {
-//                                 if (row[key] !== null && row[key] !== undefined) {
-//                                     count++;
-//                                 }
-//                             });
-//                         } else {
-//                             agg.columns.forEach(col => {
-//                                 if (row[col] !== null && row[col] !== undefined) {
-//                                     count++;
-//                                 }
-//                             });
-//                         }
-//
-//                         newRow[agg.alias || `count_${agg.columns.join('_') || 'all'}`] = count;
-//                     }
-//                 });
-//
-//                 return newRow;
-//             });
-//         }
-//
-//         // Générer les métadonnées
-//         const metaData = result.metaData ? [...result.metaData] : [];
-//
-//         // Ajouter les métadonnées pour les nouvelles colonnes calculées
-//         if (aggregates && aggregates.length > 0) {
-//             aggregates.forEach(agg => {
-//                 const alias = agg.alias ||
-//                     (agg.type === 'SUM' ? `sum_${agg.columns.join('_')}` :
-//                         agg.type === 'AVG' ? `avg_${agg.columns.join('_')}` :
-//                             `count_${agg.columns.join('_') || 'all'}`);
-//
-//                 metaData.push({
-//                     name: alias,
-//                     dbType: agg.type === 'AVG' ? 'NUMBER' : 'NUMBER',
-//                     precision: agg.type === 'AVG' ? 10 : 10,
-//                     scale: agg.type === 'AVG' ? 2 : 0
-//                 });
-//             });
-//         }
-//
-//         res.json({
-//             success: true,
-//             data: finalResults,
-//             metaData: metaData,
-//             count: finalResults.length
-//         });
-//
-//     } catch (error) {
-//         console.error('Erreur requête:', error);
-//         res.status(500).json({
-//             success: false,
-//             error: error.message
-//         });
-//     } finally {
-//         if (connection) {
-//             try {
-//                 await connection.close();
-//             } catch (error) {
-//                 console.error('Erreur fermeture:', error);
-//             }
-//         }
-//     }
-// });
-
 // Exécuter une requête avec calculs par ligne ET pagination
 app.post('/api/execute-query', async (req, res) => {
-    const { schema, table, columns, filters, sorting, aggregates, page = 1, pageSize = 50 } = req.body;
+    const { username, password, table, columns, filters, sorting, aggregates, page = 1, pageSize = 50 } = req.body;
 
-    if (!SCHEMAS[schema]) {
+    if (!username || !password) {
         return res.status(400).json({
             success: false,
-            error: `Schéma ${schema} non configuré`
+            error: 'Nom d\'utilisateur et mot de passe requis'
+        });
+    }
+
+    if (!table) {
+        return res.status(400).json({
+            success: false,
+            error: 'Nom de table requis'
         });
     }
 
     let connection;
     try {
-        const config = { ...SCHEMAS[schema], ...dbConfig };
+        const config = {
+            user: username,
+            password: password,
+            connectString: dbConfig.connectString
+        };
+
         connection = await oracledb.getConnection(config);
 
         // Construire la liste des colonnes SELECT
@@ -455,6 +221,20 @@ app.post('/api/execute-query', async (req, res) => {
                     case 'contient':
                         condition = `UPPER("${filter.field}") LIKE UPPER(:${paramName})`;
                         bindParams[paramName] = `%${filter.value}%`;
+                        break;
+                    case 'commence par':
+                        condition = `UPPER("${filter.field}") LIKE UPPER(:${paramName})`;
+                        bindParams[paramName] = `${filter.value}%`;
+                        break;
+                    case 'termine par':
+                        condition = `UPPER("${filter.field}") LIKE UPPER(:${paramName})`;
+                        bindParams[paramName] = `%${filter.value}`;
+                        break;
+                    case 'est null':
+                        condition = `"${filter.field}" IS NULL`;
+                        break;
+                    case 'n\'est pas null':
+                        condition = `"${filter.field}" IS NOT NULL`;
                         break;
                     default:
                         return;
@@ -604,10 +384,10 @@ app.post('/api/execute-query', async (req, res) => {
             data: finalResults,
             metaData: metaData,
             pagination: {
-                currentPage: page,
-                pageSize: pageSize,
-                totalCount: totalCount,
-                totalPages: totalPages,
+                currentPage: parseInt(page),
+                pageSize: parseInt(pageSize),
+                totalCount: parseInt(totalCount),
+                totalPages: parseInt(totalPages),
                 hasNextPage: page < totalPages,
                 hasPrevPage: page > 1
             },
@@ -631,17 +411,24 @@ app.post('/api/execute-query', async (req, res) => {
     }
 });
 
-// Obtenir des données d'exemple
-app.get('/api/sample-data/:schema/:table', async (req, res) => {
-    const { schema, table } = req.params;
+// Obtenir des données d'exemple avec credentials dynamiques
+app.post('/api/sample-data', async (req, res) => {
+    const { username, password, table } = req.body;
 
-    if (!SCHEMAS[schema]) {
-        return res.status(400).json({ error: `Schéma ${schema} non configuré` });
+    if (!username || !password || !table) {
+        return res.status(400).json({
+            error: 'Nom d\'utilisateur, mot de passe et nom de table requis'
+        });
     }
 
     let connection;
     try {
-        const config = { ...SCHEMAS[schema], ...dbConfig };
+        const config = {
+            user: username,
+            password: password,
+            connectString: dbConfig.connectString
+        };
+
         connection = await oracledb.getConnection(config);
 
         const result = await connection.execute(
@@ -665,6 +452,70 @@ app.get('/api/sample-data/:schema/:table', async (req, res) => {
     }
 });
 
+// Route pour obtenir des informations sur l'utilisateur/schéma
+app.post('/api/user-info', async (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({
+            success: false,
+            error: 'Nom d\'utilisateur et mot de passe requis'
+        });
+    }
+
+    let connection;
+    try {
+        const config = {
+            user: username,
+            password: password,
+            connectString: dbConfig.connectString
+        };
+
+        connection = await oracledb.getConnection(config);
+
+        // Obtenir des informations sur l'utilisateur
+        const userInfo = await connection.execute(`
+            SELECT 
+                USER as username,
+                (SELECT default_tablespace FROM user_users) as default_tablespace,
+                (SELECT temporary_tablespace FROM user_users) as temp_tablespace,
+                (SELECT created FROM user_users) as created_date,
+                SYSDATE as current_date
+            FROM DUAL
+        `, {}, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+
+        // Obtenir le nombre de tables
+        const tableCount = await connection.execute(
+            `SELECT COUNT(*) as table_count FROM user_tables`,
+            {},
+            { outFormat: oracledb.OUT_FORMAT_OBJECT }
+        );
+
+        res.json({
+            success: true,
+            userInfo: {
+                ...userInfo.rows[0],
+                tableCount: tableCount.rows[0].TABLE_COUNT
+            }
+        });
+
+    } catch (error) {
+        console.error('Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        if (connection) {
+            try {
+                await connection.close();
+            } catch (error) {
+                console.error('Erreur fermeture:', error);
+            }
+        }
+    }
+});
+
 // Fonctions utilitaires
 function mapOracleType(oracleType) {
     const typeMap = {
@@ -674,10 +525,17 @@ function mapOracleType(oracleType) {
         'DECIMAL': 'number',
         'VARCHAR2': 'text',
         'CHAR': 'text',
+        'NVARCHAR2': 'text',
+        'NCHAR': 'text',
         'DATE': 'date',
         'TIMESTAMP': 'date',
+        'TIMESTAMP WITH TIME ZONE': 'date',
+        'TIMESTAMP WITH LOCAL TIME ZONE': 'date',
         'CLOB': 'text',
-        'BLOB': 'binary'
+        'BLOB': 'binary',
+        'RAW': 'binary',
+        'LONG': 'text',
+        'LONG RAW': 'binary'
     };
     return typeMap[oracleType] || 'text';
 }
@@ -720,10 +578,10 @@ app.listen(PORT, () => {
     console.log('📊 Endpoints disponibles:');
     console.log('   GET  /api/health');
     console.log('   POST /api/test-connection');
-    console.log('   GET  /api/tables/:schema');
+    console.log('   POST /api/tables');
     console.log('   POST /api/execute-query');
-    console.log('   GET  /api/sample-data/:schema/:table');
-    console.log('   GET  /api/databases');
+    console.log('   POST /api/sample-data');
+    console.log('   POST /api/user-info');
 });
 
 // Gestion propre de la fermeture

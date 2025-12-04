@@ -9,11 +9,12 @@ import "./App.css";
 
 export default function App() {
     const toast = useRef();
-    const [selectedDb, setSelectedDb] = useState(null);
+    const [username, setUsername] = useState("");
+    const [password, setPassword] = useState("");
     const [connected, setConnected] = useState(false);
     const [result, setResult] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [loadingDatabases, setLoadingDatabases] = useState(false);
+    const [loadingTables, setLoadingTables] = useState(false);
 
     // États pour l'interface visuelle
     const [selectedTable, setSelectedTable] = useState(null);
@@ -21,6 +22,8 @@ export default function App() {
     const [filters, setFilters] = useState([]);
     const [sorting, setSorting] = useState([]);
     const [aggregates, setAggregates] = useState([]);
+    const [tables, setTables] = useState({});
+    const [userInfo, setUserInfo] = useState(null);
 
     // États pour la pagination
     const [pagination, setPagination] = useState({
@@ -51,7 +54,6 @@ export default function App() {
 
     // États pour la gestion des requêtes sauvegardées
     const [savedQueries, setSavedQueries] = useState(() => {
-        // Charger depuis le localStorage au démarrage
         try {
             const saved = localStorage.getItem('savedQueries');
             return saved ? JSON.parse(saved) : [];
@@ -69,10 +71,6 @@ export default function App() {
 
     // URL de base de l'API backend
     const API_BASE_URL = 'http://localhost:5000/api';
-
-    // États pour les bases de données détectées
-    const [availableDatabases, setAvailableDatabases] = useState([]);
-    const [businessDatabases, setBusinessDatabases] = useState({});
 
     // Fonction utilitaire pour formater les labels des colonnes
     const formatColumnLabel = (columnName) => {
@@ -109,91 +107,53 @@ export default function App() {
         return '';
     };
 
-    // Charger les bases de données disponibles au démarrage
-    useEffect(() => {
-        const loadDatabases = async () => {
-            setLoadingDatabases(true);
-            try {
-                const response = await fetch(`${API_BASE_URL}/databases`);
-                const result = await response.json();
-
-                if (result.success) {
-                    setAvailableDatabases(result.databases);
-
-                    // Initialiser businessDatabases avec les schémas détectés
-                    const databasesObj = {};
-                    result.databases.forEach(db => {
-                        databasesObj[db.value] = {
-                            name: db.name,
-                            description: db.description || `Base de données ${db.name}`,
-                            tables: {}
-                        };
-                    });
-                    setBusinessDatabases(databasesObj);
-                }
-            } catch (error) {
-                console.error('Erreur chargement bases:', error);
-                // Fallback vers les bases par défaut
-                const defaultDbs = {
-                    "COMPTABILITE": {
-                        name: "Base Comptabilité",
-                        description: "Données financières et comptables",
-                        tables: {}
-                    },
-                    "VENTES": {
-                        name: "Base Ventes",
-                        description: "Données commerciales et ventes",
-                        tables: {}
-                    }
-                };
-                setBusinessDatabases(defaultDbs);
-                setAvailableDatabases(Object.keys(defaultDbs).map(key => ({
-                    label: defaultDbs[key].name,
-                    value: key,
-                    description: defaultDbs[key].description
-                })));
-            } finally {
-                setLoadingDatabases(false);
-            }
-        };
-
-        loadDatabases();
-    }, []);
-
     // Connexion à la base de données via l'API
     const handleConnect = async () => {
-        if (!selectedDb) return;
+        if (!username || !password) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Informations manquantes',
+                detail: 'Veuillez entrer un nom d\'utilisateur et un mot de passe'
+            });
+            return;
+        }
 
         setLoading(true);
         try {
+            // Tester la connexion
             const response = await fetch(`${API_BASE_URL}/test-connection`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ schema: selectedDb })
+                body: JSON.stringify({ username, password })
             });
 
             const result = await response.json();
 
             if (result.success) {
-                // Charger les métadonnées des tables
-                const tablesResponse = await fetch(`${API_BASE_URL}/tables/${selectedDb}`);
-                const tablesData = await tablesResponse.json();
+                // Charger les informations utilisateur
+                const userResponse = await fetch(`${API_BASE_URL}/user-info`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password })
+                });
 
-                setBusinessDatabases(prev => ({
-                    ...prev,
-                    [selectedDb]: {
-                        ...prev[selectedDb],
-                        tables: tablesData
-                    }
-                }));
+                const userData = await userResponse.json();
+                if (userData.success) {
+                    setUserInfo(userData.userInfo);
+                }
+
+                // Charger les tables
+                await loadTables();
 
                 setConnected(true);
                 toast.current.show({
                     severity: 'success',
                     summary: 'Connecté',
-                    detail: `Base ${businessDatabases[selectedDb]?.name || selectedDb} ouverte`
+                    detail: `Connexion réussie : ${result.username}`
                 });
             } else {
                 throw new Error(result.message);
@@ -210,9 +170,38 @@ export default function App() {
         }
     };
 
+    // Charger les tables
+    const loadTables = async () => {
+        setLoadingTables(true);
+        try {
+            const response = await fetch(`${API_BASE_URL}/tables`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username, password })
+            });
+
+            const tablesData = await response.json();
+            setTables(tablesData);
+        } catch (error) {
+            console.error('Erreur chargement tables:', error);
+            toast.current.show({
+                severity: 'error',
+                summary: 'Erreur',
+                detail: 'Impossible de charger les tables'
+            });
+        } finally {
+            setLoadingTables(false);
+        }
+    };
+
     const handleDisconnect = () => {
         setConnected(false);
-        setSelectedDb(null);
+        setUsername("");
+        setPassword("");
+        setUserInfo(null);
+        setTables({});
         setSelectedTable(null);
         setSelectedColumns([]);
         setFilters([]);
@@ -234,7 +223,7 @@ export default function App() {
     const handleTableSelect = (tableKey) => {
         setSelectedTable(tableKey);
         // Sélectionner toutes les colonnes par défaut
-        const tableFields = businessDatabases[selectedDb].tables[tableKey]?.fields || [];
+        const tableFields = tables[tableKey]?.fields || [];
         setSelectedColumns(tableFields.map(f => f.name));
         setShowColumnsDropdown(true);
         setShowTableDialog(false);
@@ -251,7 +240,7 @@ export default function App() {
         toast.current.show({
             severity: 'info',
             summary: 'Table sélectionnée',
-            detail: businessDatabases[selectedDb].tables[tableKey]?.name || tableKey
+            detail: tables[tableKey]?.name || tableKey
         });
     };
 
@@ -324,8 +313,8 @@ export default function App() {
 
     // Options pour les colonnes
     const getFieldOptions = () => {
-        if (!selectedDb || !selectedTable) return [];
-        const table = businessDatabases[selectedDb].tables[selectedTable];
+        if (!selectedTable) return [];
+        const table = tables[selectedTable];
         return table?.fields?.map(field => ({
             label: field.label || formatColumnLabel(field.name),
             value: field.name,
@@ -335,11 +324,10 @@ export default function App() {
 
     // Options pour les colonnes numériques
     const getNumericFieldOptions = () => {
-        if (!selectedDb || !selectedTable) return [];
-        const table = businessDatabases[selectedDb].tables[selectedTable];
+        if (!selectedTable) return [];
+        const table = tables[selectedTable];
         return table?.fields
             ?.filter(field => {
-                // Inclure les types numériques
                 const numericTypes = ['number', 'NUMBER', 'INTEGER', 'FLOAT', 'DECIMAL'];
                 return numericTypes.includes(field.type) ||
                     (typeof field.type === 'string' &&
@@ -389,7 +377,8 @@ export default function App() {
             }));
 
             const requestBody = {
-                schema: selectedDb,
+                username,
+                password,
                 table: selectedTable,
                 columns: selectedColumns,
                 filters: preparedFilters,
@@ -399,7 +388,7 @@ export default function App() {
                 pageSize: newPageSize || pagination.pageSize
             };
 
-            console.log('Envoi au backend avec pagination:', JSON.stringify(requestBody, null, 2));
+            console.log('Envoi au backend:', JSON.stringify(requestBody, null, 2));
 
             const response = await fetch(`${API_BASE_URL}/execute-query`, {
                 method: 'POST',
@@ -499,7 +488,7 @@ export default function App() {
 
     // Sélectionner/Désélectionner toutes les colonnes
     const toggleAllColumns = () => {
-        const tableFields = businessDatabases[selectedDb].tables[selectedTable]?.fields || [];
+        const tableFields = tables[selectedTable]?.fields || [];
         if (selectedColumns.length === tableFields.length) {
             // Tout désélectionner
             setSelectedColumns([]);
@@ -595,28 +584,38 @@ export default function App() {
                         <div className="d-flex align-items-center">
                             <i className="pi pi-table fs-3 text-primary me-3"></i>
                             <div>
-                                <h1 className="h4 mb-0 text-dark fw-bold">Assistant de Requêtes Métier</h1>
+                                <h1 className="h4 mb-0 text-dark fw-bold">Assistant de Requêtes Oracle</h1>
                                 <small className="text-muted">Interface visuelle pour bases Oracle</small>
                             </div>
                         </div>
-                        <div className="d-flex gap-2">
-                            <button
-                                className="btn btn-outline-primary btn-sm"
-                                onClick={() => setShowLoadQueryDialog(true)}
-                                disabled={savedQueries.length === 0}
-                            >
-                                <i className="pi pi-folder me-1"></i>
-                                Mes requêtes
-                            </button>
-                            <button
-                                className="btn btn-primary btn-sm"
-                                onClick={() => setShowSaveQueryDialog(true)}
-                                disabled={!selectedTable || result.length === 0}
-                            >
-                                <i className="pi pi-save me-1"></i>
-                                Sauvegarder
-                            </button>
-                        </div>
+                        {connected && userInfo && (
+                            <div className="d-flex align-items-center gap-3">
+                                <div className="text-end">
+                                    <div className="fw-semibold">{userInfo.USERNAME}</div>
+                                    <small className="text-muted">
+                                        {userInfo.TABLE_COUNT} table(s) | {userInfo.DEFAULT_TABLESPACE}
+                                    </small>
+                                </div>
+                                <div className="d-flex gap-2">
+                                    <button
+                                        className="btn btn-outline-primary btn-sm"
+                                        onClick={() => setShowLoadQueryDialog(true)}
+                                        disabled={savedQueries.length === 0}
+                                    >
+                                        <i className="pi pi-folder me-1"></i>
+                                        Mes requêtes
+                                    </button>
+                                    <button
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() => setShowSaveQueryDialog(true)}
+                                        disabled={!selectedTable || result.length === 0}
+                                    >
+                                        <i className="pi pi-save me-1"></i>
+                                        Sauvegarder
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </header>
@@ -626,33 +625,55 @@ export default function App() {
                 <div className="container-fluid px-4">
                     <div className="row align-items-center g-2">
                         <div className="col-md-8">
-                            <div className="d-flex align-items-center gap-2">
-                                <select
-                                    className="form-select w-auto"
-                                    value={selectedDb || ""}
-                                    onChange={e => setSelectedDb(e.target.value)}
-                                    disabled={connected || loadingDatabases}
-                                >
-                                    <option value="">{loadingDatabases ? "Chargement des bases..." : "Choisir une base de données..."}</option>
-                                    {availableDatabases.map(db => (
-                                        <option key={db.value} value={db.value}>
-                                            {db.label || db.name || db.value}
-                                        </option>
-                                    ))}
-                                </select>
-                                {selectedDb && (
-                                    <span className="text-muted small">
-                                        {businessDatabases[selectedDb]?.description || `Base ${selectedDb}`}
+                            {!connected ? (
+                                <div className="d-flex align-items-center gap-3">
+                                    <div className="input-group" style={{ maxWidth: '300px' }}>
+                                        <span className="input-group-text">
+                                            <i className="pi pi-user"></i>
+                                        </span>
+                                        <input
+                                            type="text"
+                                            className="form-control"
+                                            placeholder="Nom d'utilisateur"
+                                            value={username}
+                                            onChange={(e) => setUsername(e.target.value)}
+                                            disabled={loading}
+                                        />
+                                    </div>
+                                    <div className="input-group" style={{ maxWidth: '300px' }}>
+                                        <span className="input-group-text">
+                                            <i className="pi pi-key"></i>
+                                        </span>
+                                        <input
+                                            type="password"
+                                            className="form-control"
+                                            placeholder="Mot de passe"
+                                            value={password}
+                                            onChange={(e) => setPassword(e.target.value)}
+                                            disabled={loading}
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="d-flex align-items-center gap-2">
+                                    <span className="fw-semibold text-primary">
+                                        <i className="pi pi-database me-1"></i>
+                                        Connecté en tant que: {userInfo?.USERNAME}
                                     </span>
-                                )}
-                            </div>
+                                    {selectedTable && (
+                                        <span className="text-muted small ms-3">
+                                            Table active: <strong>{tables[selectedTable]?.name || selectedTable}</strong>
+                                        </span>
+                                    )}
+                                </div>
+                            )}
                         </div>
                         <div className="col-md-4 text-end">
                             {!connected ? (
                                 <button
                                     className="btn btn-primary"
                                     onClick={handleConnect}
-                                    disabled={!selectedDb || loading || loadingDatabases}
+                                    disabled={(!username || !password) || loading}
                                 >
                                     {loading ? (
                                         <>
@@ -662,7 +683,7 @@ export default function App() {
                                     ) : (
                                         <>
                                             <i className="pi pi-folder-open me-2"></i>
-                                            Ouvrir la base
+                                            Se connecter
                                         </>
                                     )}
                                 </button>
@@ -671,8 +692,8 @@ export default function App() {
                                     className="btn btn-outline-secondary"
                                     onClick={handleDisconnect}
                                 >
-                                    <i className="pi pi-sync me-2"></i>
-                                    Changer de base
+                                    <i className="pi pi-sign-out me-2"></i>
+                                    Déconnexion
                                 </button>
                             )}
                         </div>
@@ -715,7 +736,7 @@ export default function App() {
                                                         <i className="pi pi-table text-primary me-2"></i>
                                                         <div>
                                                             <div className="fw-semibold">
-                                                                {businessDatabases[selectedDb].tables[selectedTable]?.name || selectedTable}
+                                                                {tables[selectedTable]?.name || selectedTable}
                                                             </div>
                                                             <small className="text-muted">
                                                                 {selectedColumns.length} colonne(s) sélectionnée(s)
@@ -751,16 +772,16 @@ export default function App() {
                                                                 className="btn btn-sm btn-outline-secondary"
                                                                 onClick={toggleAllColumns}
                                                             >
-                                                                {selectedColumns.length === businessDatabases[selectedDb].tables[selectedTable]?.fields?.length
+                                                                {selectedColumns.length === tables[selectedTable]?.fields?.length
                                                                     ? 'Tout désélectionner'
                                                                     : 'Tout sélectionner'}
                                                             </button>
                                                             <small className="text-muted">
-                                                                {selectedColumns.length} sur {businessDatabases[selectedDb].tables[selectedTable]?.fields?.length || 0}
+                                                                {selectedColumns.length} sur {tables[selectedTable]?.fields?.length || 0}
                                                             </small>
                                                         </div>
                                                         <div className="list-group" style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                                                            {businessDatabases[selectedDb].tables[selectedTable]?.fields?.map(field => (
+                                                            {tables[selectedTable]?.fields?.map(field => (
                                                                 <div key={field.name} className="list-group-item list-group-item-action p-2">
                                                                     <div className="form-check">
                                                                         <input
@@ -1173,9 +1194,19 @@ export default function App() {
                                         <button
                                             className="btn btn-primary btn-lg"
                                             onClick={() => setShowTableDialog(true)}
+                                            disabled={loadingTables}
                                         >
-                                            <i className="pi pi-table me-2"></i>
-                                            Choisir une table
+                                            {loadingTables ? (
+                                                <>
+                                                    <span className="spinner-border spinner-border-sm me-2"></span>
+                                                    Chargement des tables...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <i className="pi pi-table me-2"></i>
+                                                    Choisir une table
+                                                </>
+                                            )}
                                         </button>
                                     </div>
                                 </div>
@@ -1189,7 +1220,7 @@ export default function App() {
                             <div className="card shadow-sm">
                                 <div className="card-body text-center py-5">
                                     <i className="pi pi-chart-line text-primary mb-4" style={{ fontSize: '4rem' }}></i>
-                                    <h2 className="card-title mb-3">Assistant de Requêtes Métier</h2>
+                                    <h2 className="card-title mb-3">Assistant de Requêtes Oracle</h2>
                                     <p className="card-text text-muted mb-4">
                                         Interface visuelle pour extraire des données Oracle sans connaissance SQL.
                                     </p>
@@ -1226,7 +1257,6 @@ export default function App() {
                 )}
             </main>
 
-            {/* Les modals restent les mêmes que précédemment... */}
             {/* Modal pour choisir une table */}
             {showTableDialog && (
                 <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
@@ -1240,17 +1270,17 @@ export default function App() {
                                 <button type="button" className="btn-close" onClick={() => setShowTableDialog(false)}></button>
                             </div>
                             <div className="modal-body">
-                                {Object.keys(businessDatabases[selectedDb]?.tables || {}).length === 0 ? (
+                                {Object.keys(tables || {}).length === 0 ? (
                                     <div className="text-center py-5">
                                         <i className="pi pi-database text-muted mb-3" style={{ fontSize: '3rem' }}></i>
                                         <h5 className="text-muted mb-2">Aucune table disponible</h5>
                                         <p className="text-muted">
-                                            La base de données ne contient pas de tables accessibles.
+                                            Aucune table n'a été trouvée dans votre schéma.
                                         </p>
                                     </div>
                                 ) : (
                                     <div className="row g-3">
-                                        {Object.entries(businessDatabases[selectedDb]?.tables || {}).map(([key, table]) => (
+                                        {Object.entries(tables || {}).map(([key, table]) => (
                                             <div key={key} className="col-4 col-md-3 col-lg-2">
                                                 <div
                                                     className="table-selector-card card text-center cursor-pointer position-relative"
@@ -1292,7 +1322,7 @@ export default function App() {
                                 <div className="d-flex justify-content-between w-100 align-items-center">
                                     <div className="text-muted small">
                                         <i className="pi pi-info-circle me-1"></i>
-                                        {Object.keys(businessDatabases[selectedDb]?.tables || {}).length} table(s) - Survolez pour voir les noms complets
+                                        {Object.keys(tables || {}).length} table(s) - Survolez pour voir les noms complets
                                     </div>
                                     <button type="button" className="btn btn-secondary" onClick={() => setShowTableDialog(false)}>
                                         Annuler
@@ -1304,8 +1334,224 @@ export default function App() {
                 </div>
             )}
 
-            {/* Les autres modals (filtre, tri, calcul, sauvegarde) restent les mêmes... */}
-            {/* ... */}
+            {/* Les modals pour filtres, tris, calculs, sauvegarde... */}
+            {/* Modal pour ajouter un filtre */}
+            {showFilterDialog && (
+                <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h5 className="modal-title">
+                                    <i className="pi pi-filter me-2"></i>
+                                    Ajouter un filtre
+                                </h5>
+                                <button type="button" className="btn-close" onClick={() => setShowFilterDialog(false)}></button>
+                            </div>
+                            <div className="modal-body">
+                                <div className="mb-3">
+                                    <label className="form-label">Colonne</label>
+                                    <select
+                                        className="form-select"
+                                        value={currentFilter.field}
+                                        onChange={(e) => setCurrentFilter({...currentFilter, field: e.target.value})}
+                                    >
+                                        <option value="">Sélectionnez une colonne</option>
+                                        {getFieldOptions().map(option => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="mb-3">
+                                    <label className="form-label">Opérateur</label>
+                                    <select
+                                        className="form-select"
+                                        value={currentFilter.operator}
+                                        onChange={(e) => setCurrentFilter({...currentFilter, operator: e.target.value})}
+                                    >
+                                        <option value="=">Égal à</option>
+                                        <option value="!=">Différent de</option>
+                                        <option value=">">Supérieur à</option>
+                                        <option value="<">Inférieur à</option>
+                                        <option value=">=">Supérieur ou égal à</option>
+                                        <option value="<=">Inférieur ou égal à</option>
+                                        <option value="contient">Contient</option>
+                                        <option value="commence par">Commence par</option>
+                                        <option value="termine par">Termine par</option>
+                                        <option value="est null">Est vide (NULL)</option>
+                                        <option value="n'est pas null">N'est pas vide</option>
+                                    </select>
+                                </div>
+                                {currentFilter.operator !== 'est null' && currentFilter.operator !== 'n\'est pas null' && (
+                                    <div className="mb-3">
+                                        <label className="form-label">Valeur</label>
+                                        <input
+                                            type="text"
+                                            className="form-control"
+                                            value={currentFilter.value}
+                                            onChange={(e) => setCurrentFilter({...currentFilter, value: e.target.value})}
+                                            placeholder="Entrez la valeur"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={() => setShowFilterDialog(false)}>
+                                    Annuler
+                                </button>
+                                <button type="button" className="btn btn-primary" onClick={addFilter}>
+                                    Ajouter
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal pour ajouter un tri */}
+            {showSortDialog && (
+                <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h5 className="modal-title">
+                                    <i className="pi pi-sort-alt me-2"></i>
+                                    Ajouter un tri
+                                </h5>
+                                <button type="button" className="btn-close" onClick={() => setShowSortDialog(false)}></button>
+                            </div>
+                            <div className="modal-body">
+                                <div className="mb-3">
+                                    <label className="form-label">Colonne</label>
+                                    <select
+                                        className="form-select"
+                                        value={currentSort.field}
+                                        onChange={(e) => setCurrentSort({...currentSort, field: e.target.value})}
+                                    >
+                                        <option value="">Sélectionnez une colonne</option>
+                                        {getFieldOptions().map(option => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="mb-3">
+                                    <label className="form-label">Ordre</label>
+                                    <select
+                                        className="form-select"
+                                        value={currentSort.direction}
+                                        onChange={(e) => setCurrentSort({...currentSort, direction: e.target.value})}
+                                    >
+                                        <option value="ASC">Croissant (A-Z)</option>
+                                        <option value="DESC">Décroissant (Z-A)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={() => setShowSortDialog(false)}>
+                                    Annuler
+                                </button>
+                                <button type="button" className="btn btn-primary" onClick={addSort}>
+                                    Ajouter
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal pour ajouter un calcul */}
+            {showAggregateDialog && (
+                <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h5 className="modal-title">
+                                    <i className="pi pi-calculator me-2"></i>
+                                    Ajouter un calcul
+                                </h5>
+                                <button type="button" className="btn-close" onClick={() => setShowAggregateDialog(false)}></button>
+                            </div>
+                            <div className="modal-body">
+                                <div className="mb-3">
+                                    <label className="form-label">Type de calcul</label>
+                                    <select
+                                        className="form-select"
+                                        value={currentAggregate.type}
+                                        onChange={(e) => setCurrentAggregate({...currentAggregate, type: e.target.value, columns: []})}
+                                    >
+                                        <option value="">Sélectionnez un type</option>
+                                        <option value="SUM">Somme</option>
+                                        <option value="AVG">Moyenne</option>
+                                        <option value="COUNT">Compte</option>
+                                    </select>
+                                </div>
+                                {currentAggregate.type && currentAggregate.type !== 'COUNT' && (
+                                    <div className="mb-3">
+                                        <label className="form-label">Colonnes à calculer</label>
+                                        <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                                            {getNumericFieldOptions().map(option => (
+                                                <div key={option.value} className="form-check">
+                                                    <input
+                                                        className="form-check-input"
+                                                        type="checkbox"
+                                                        id={`agg_${option.value}`}
+                                                        checked={currentAggregate.columns.includes(option.value)}
+                                                        onChange={(e) => {
+                                                            if (e.target.checked) {
+                                                                setCurrentAggregate({
+                                                                    ...currentAggregate,
+                                                                    columns: [...currentAggregate.columns, option.value]
+                                                                });
+                                                            } else {
+                                                                setCurrentAggregate({
+                                                                    ...currentAggregate,
+                                                                    columns: currentAggregate.columns.filter(col => col !== option.value)
+                                                                });
+                                                            }
+                                                        }}
+                                                    />
+                                                    <label className="form-check-label" htmlFor={`agg_${option.value}`}>
+                                                        {option.label}
+                                                    </label>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="mb-3">
+                                    <label className="form-label">Alias (optionnel)</label>
+                                    <input
+                                        type="text"
+                                        className="form-control"
+                                        value={currentAggregate.alias}
+                                        onChange={(e) => setCurrentAggregate({...currentAggregate, alias: e.target.value})}
+                                        placeholder="Nom de la colonne calculée"
+                                    />
+                                    <small className="text-muted">
+                                        Si vide, un nom sera généré automatiquement
+                                    </small>
+                                </div>
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={() => setShowAggregateDialog(false)}>
+                                    Annuler
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={addAggregate}
+                                    disabled={!currentAggregate.type || (currentAggregate.type !== 'COUNT' && currentAggregate.columns.length === 0)}
+                                >
+                                    Ajouter
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
