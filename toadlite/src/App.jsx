@@ -246,22 +246,76 @@ export default function App() {
 
     // Ajout de filtre
     const addFilter = () => {
-        if (!currentFilter.field || !currentFilter.value) return;
+        if (!currentFilter.field) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Champ manquant',
+                detail: 'Veuillez sélectionner une colonne'
+            });
+            return;
+        }
+
+        // Pour les opérateurs qui n'ont pas besoin de valeur
+        const needsValue = !['est null', 'n\'est pas null'].includes(currentFilter.operator);
+
+        if (needsValue && !currentFilter.value) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Valeur manquante',
+                detail: 'Veuillez entrer une valeur pour le filtre'
+            });
+            return;
+        }
+
+        // Créer le label du filtre
+        let filterLabel = '';
+        switch(currentFilter.operator) {
+            case 'est null':
+                filterLabel = `${formatColumnLabel(currentFilter.field)} est vide (NULL)`;
+                break;
+            case 'n\'est pas null':
+                filterLabel = `${formatColumnLabel(currentFilter.field)} n'est pas vide`;
+                break;
+            case 'contient':
+                filterLabel = `${formatColumnLabel(currentFilter.field)} contient "${currentFilter.value}"`;
+                break;
+            case 'commence par':
+                filterLabel = `${formatColumnLabel(currentFilter.field)} commence par "${currentFilter.value}"`;
+                break;
+            case 'termine par':
+                filterLabel = `${formatColumnLabel(currentFilter.field)} termine par "${currentFilter.value}"`;
+                break;
+            default:
+                filterLabel = `${formatColumnLabel(currentFilter.field)} ${currentFilter.operator} "${currentFilter.value}"`;
+        }
 
         const newFilter = {
             id: `filter_${Date.now()}`,
             ...currentFilter,
-            label: formatColumnLabel(currentFilter.field)
+            label: filterLabel
         };
 
         setFilters([...filters, newFilter]);
         setCurrentFilter({ field: "", operator: "=", value: "" });
         setShowFilterDialog(false);
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Filtre ajouté',
+            detail: filterLabel
+        });
     };
 
     // Ajout de tri
     const addSort = () => {
-        if (!currentSort.field) return;
+        if (!currentSort.field) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Champ manquant',
+                detail: 'Veuillez sélectionner une colonne'
+            });
+            return;
+        }
 
         const newSort = {
             id: `sort_${Date.now()}`,
@@ -272,11 +326,33 @@ export default function App() {
         setSorting([...sorting, newSort]);
         setCurrentSort({ field: "", direction: "ASC" });
         setShowSortDialog(false);
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Tri ajouté',
+            detail: `${newSort.label} (${newSort.direction === "ASC" ? "croissant" : "décroissant"})`
+        });
     };
 
     // Ajouter un agrégat
     const addAggregate = () => {
-        if (!currentAggregate.type || (currentAggregate.type !== 'COUNT' && currentAggregate.columns.length === 0)) return;
+        if (!currentAggregate.type) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Type manquant',
+                detail: 'Veuillez sélectionner un type de calcul'
+            });
+            return;
+        }
+
+        if (currentAggregate.type !== 'COUNT' && currentAggregate.columns.length === 0) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Colonnes manquantes',
+                detail: 'Veuillez sélectionner au moins une colonne pour le calcul'
+            });
+            return;
+        }
 
         const newAggregate = {
             id: `agg_${Date.now()}`,
@@ -296,19 +372,52 @@ export default function App() {
         setAggregates([...aggregates, newAggregate]);
         setCurrentAggregate({ type: "", columns: [], alias: "" });
         setShowAggregateDialog(false);
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Calcul ajouté',
+            detail: newAggregate.label
+        });
     };
 
     // Suppression de filtre/tri/agrégat
     const removeFilter = (id) => {
-        setFilters(filters.filter(f => f.id !== id));
+        const filterToRemove = filters.find(f => f.id === id);
+        if (filterToRemove) {
+            setFilters(filters.filter(f => f.id !== id));
+
+            toast.current.show({
+                severity: 'info',
+                summary: 'Filtre supprimé',
+                detail: filterToRemove.label
+            });
+        }
     };
 
     const removeSort = (id) => {
-        setSorting(sorting.filter(s => s.id !== id));
+        const sortToRemove = sorting.find(s => s.id === id);
+        if (sortToRemove) {
+            setSorting(sorting.filter(s => s.id !== id));
+
+            toast.current.show({
+                severity: 'info',
+                summary: 'Tri supprimé',
+                detail: `${sortToRemove.label} (${sortToRemove.direction === "ASC" ? "croissant" : "décroissant"})`
+            });
+        }
     };
 
     const removeAggregate = (id) => {
-        setAggregates(aggregates.filter(a => a.id !== id));
+        const aggToRemove = aggregates.find(a => a.id === id);
+        if (aggToRemove) {
+            setAggregates(aggregates.filter(a => a.id !== id));
+
+            toast.current.show({
+                severity: 'info',
+                summary: 'Calcul supprimé',
+                detail: aggToRemove.label
+            });
+        }
     };
 
     // Options pour les colonnes
@@ -463,6 +572,12 @@ export default function App() {
             hasPrevPage: false
         });
         setShowColumnsDropdown(true);
+
+        toast.current.show({
+            severity: 'info',
+            summary: 'Requête réinitialisée',
+            detail: 'Tous les filtres, tris et calculs ont été supprimés'
+        });
     };
 
     // Formater une valeur pour l'affichage
@@ -630,7 +745,7 @@ export default function App() {
         });
     };
 
-// Fonction pour charger une requête sauvegardée
+    // Fonction pour charger une requête sauvegardée
     const loadSavedQuery = (query) => {
         console.log('Chargement de la requête:', query);
 
@@ -671,7 +786,7 @@ export default function App() {
         }, 500);
     };
 
-// Fonction pour supprimer une requête sauvegardée
+    // Fonction pour supprimer une requête sauvegardée
     const deleteSavedQuery = (queryId) => {
         const updatedQueries = savedQueries.filter(q => q.id !== queryId);
         setSavedQueries(updatedQueries);
@@ -684,7 +799,7 @@ export default function App() {
         });
     };
 
-// Fonction pour exporter une seule requête
+    // Fonction pour exporter une seule requête
     const exportSingleQuery = (query) => {
         const dataStr = JSON.stringify(query, null, 2);
         const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
@@ -962,22 +1077,45 @@ export default function App() {
                                                 </div>
                                             ) : (
                                                 <div className="list-group">
-                                                    {filters.map(filter => (
-                                                        <div key={filter.id} className="list-group-item list-group-item-info p-2">
-                                                            <div className="d-flex justify-content-between align-items-center">
-                                                                <div>
-                                                                    <div className="fw-semibold">{filter.label}</div>
-                                                                    <small>{filter.operator} "{filter.value}"</small>
+                                                    {filters.map(filter => {
+                                                        let displayText = '';
+                                                        switch(filter.operator) {
+                                                            case 'est null':
+                                                                displayText = 'est vide (NULL)';
+                                                                break;
+                                                            case 'n\'est pas null':
+                                                                displayText = 'n\'est pas vide';
+                                                                break;
+                                                            case 'contient':
+                                                                displayText = `contient "${filter.value}"`;
+                                                                break;
+                                                            case 'commence par':
+                                                                displayText = `commence par "${filter.value}"`;
+                                                                break;
+                                                            case 'termine par':
+                                                                displayText = `termine par "${filter.value}"`;
+                                                                break;
+                                                            default:
+                                                                displayText = `${filter.operator} "${filter.value}"`;
+                                                        }
+
+                                                        return (
+                                                            <div key={filter.id} className="list-group-item list-group-item-info p-2">
+                                                                <div className="d-flex justify-content-between align-items-center">
+                                                                    <div>
+                                                                        <div className="fw-semibold">{filter.label}</div>
+                                                                        <small>{displayText}</small>
+                                                                    </div>
+                                                                    <button
+                                                                        className="btn btn-sm btn-outline-danger"
+                                                                        onClick={() => removeFilter(filter.id)}
+                                                                    >
+                                                                        <i className="pi pi-times"></i>
+                                                                    </button>
                                                                 </div>
-                                                                <button
-                                                                    className="btn btn-sm btn-outline-danger"
-                                                                    onClick={() => removeFilter(filter.id)}
-                                                                >
-                                                                    <i className="pi pi-times"></i>
-                                                                </button>
                                                             </div>
-                                                        </div>
-                                                    ))}
+                                                        );
+                                                    })}
                                                 </div>
                                             )}
                                         </div>
@@ -1458,7 +1596,6 @@ export default function App() {
                 </div>
             )}
 
-            {/* Les modals pour filtres, tris, calculs, sauvegarde... */}
             {/* Modal pour ajouter un filtre */}
             {showFilterDialog && (
                 <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
@@ -1519,12 +1656,28 @@ export default function App() {
                                         />
                                     </div>
                                 )}
+                                {(currentFilter.operator === 'est null' || currentFilter.operator === 'n\'est pas null') && (
+                                    <div className="alert alert-info">
+                                        <i className="pi pi-info-circle me-2"></i>
+                                        <small>
+                                            {currentFilter.operator === 'est null'
+                                                ? 'Ce filtre sélectionnera les lignes où cette colonne est NULL (vide).'
+                                                : 'Ce filtre sélectionnera les lignes où cette colonne n\'est pas NULL (contient une valeur).'
+                                            }
+                                        </small>
+                                    </div>
+                                )}
                             </div>
                             <div className="modal-footer">
                                 <button type="button" className="btn btn-secondary" onClick={() => setShowFilterDialog(false)}>
                                     Annuler
                                 </button>
-                                <button type="button" className="btn btn-primary" onClick={addFilter}>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={addFilter}
+                                    disabled={!currentFilter.field || (currentFilter.operator !== 'est null' && currentFilter.operator !== 'n\'est pas null' && !currentFilter.value)}
+                                >
                                     Ajouter
                                 </button>
                             </div>
@@ -1676,6 +1829,8 @@ export default function App() {
                     </div>
                 </div>
             )}
+
+            {/* Modal pour sauvegarder une requête */}
             {showSaveQueryDialog && (
                 <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
                     <div className="modal-dialog">
