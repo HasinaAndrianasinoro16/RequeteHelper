@@ -644,45 +644,213 @@ export default function App() {
 
     // Fonctions pour l'export/import des requêtes
     const exportQueries = () => {
+        if (savedQueries.length === 0) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Aucune requête',
+                detail: 'Il n\'y a aucune requête à exporter'
+            });
+            return;
+        }
+
         const dataStr = JSON.stringify(savedQueries, null, 2);
         const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
 
-        const exportFileDefaultName = `requetes_sauvegardees_${new Date().toISOString().split('T')[0]}.json`;
+        const date = new Date();
+        const formattedDate = date.toISOString().split('T')[0];
+        const formattedTime = date.toTimeString().split(' ')[0].replace(/:/g, '-');
+        const exportFileDefaultName = `requetes_sauvegardees_${formattedDate}_${formattedTime}.req`;
 
         const linkElement = document.createElement('a');
         linkElement.setAttribute('href', dataUri);
         linkElement.setAttribute('download', exportFileDefaultName);
         linkElement.click();
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Export réussi',
+            detail: `${savedQueries.length} requête(s) exportée(s) au format .req`
+        });
     };
 
     const importQueries = (event) => {
         const file = event.target.files[0];
         if (!file) return;
 
+        // Vérifier l'extension du fichier
+        const fileName = file.name.toLowerCase();
+        if (!fileName.endsWith('.req') && !fileName.endsWith('.json')) {
+            toast.current.show({
+                severity: 'error',
+                summary: 'Format incorrect',
+                detail: 'Veuillez sélectionner un fichier .req ou .json'
+            });
+            event.target.value = '';
+            return;
+        }
+
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
-                const imported = JSON.parse(e.target.result);
-                if (Array.isArray(imported)) {
-                    setSavedQueries(imported);
-                    localStorage.setItem('savedQueries', JSON.stringify(imported));
-                    toast.current.show({
-                        severity: 'success',
-                        summary: 'Import réussi',
-                        detail: `${imported.length} requête(s) importée(s)`
-                    });
-                } else {
-                    throw new Error('Format invalide');
+                const content = e.target.result;
+
+                // Vérifier si le contenu est vide
+                if (!content || content.trim() === '') {
+                    throw new Error('Le fichier est vide');
                 }
+
+                let imported;
+                try {
+                    imported = JSON.parse(content);
+                } catch (parseError) {
+                    console.error('Erreur de parsing JSON:', parseError);
+                    throw new Error('Le fichier n\'est pas un JSON valide');
+                }
+
+                // Accepter à la fois les tableaux et les objets simples
+                let queriesArray = [];
+
+                if (Array.isArray(imported)) {
+                    // C'est un tableau de requêtes
+                    queriesArray = imported;
+                } else if (imported && typeof imported === 'object') {
+                    // C'est un objet unique - le transformer en tableau
+                    if (imported.id && imported.name && imported.config) {
+                        queriesArray = [imported];
+                    } else {
+                        // Essayer de trouver des requêtes dans des propriétés de l'objet
+                        for (const key in imported) {
+                            const value = imported[key];
+                            if (value && typeof value === 'object' && value.id && value.name && value.config) {
+                                queriesArray.push(value);
+                            }
+                        }
+
+                        if (queriesArray.length === 0) {
+                            // Essayer de voir si c'est un objet avec des requêtes dans une propriété
+                            if (imported.queries && Array.isArray(imported.queries)) {
+                                queriesArray = imported.queries;
+                            } else if (imported.savedQueries && Array.isArray(imported.savedQueries)) {
+                                queriesArray = imported.savedQueries;
+                            } else if (imported.data && Array.isArray(imported.data)) {
+                                queriesArray = imported.data;
+                            }
+                        }
+                    }
+                }
+
+                if (queriesArray.length === 0) {
+                    throw new Error('Aucune requête valide trouvée dans le fichier');
+                }
+
+                // Valider le format de chaque requête
+                const validQueries = queriesArray.filter(query => {
+                    try {
+                        return query &&
+                            typeof query === 'object' &&
+                            query.name &&
+                            query.config &&
+                            query.config.selectedTable &&
+                            Array.isArray(query.config.selectedColumns);
+                    } catch {
+                        return false;
+                    }
+                });
+
+                if (validQueries.length === 0) {
+                    throw new Error('Aucune requête valide dans le fichier. Format attendu: {name: "...", config: {selectedTable: "...", selectedColumns: [...]}}');
+                }
+
+                console.log('Requêtes validées:', validQueries);
+
+                // Fusionner avec les requêtes existantes (éviter les doublons basés sur l'ID)
+                const existingIds = new Set(savedQueries.map(q => q.id));
+                const newQueries = validQueries.filter(query => {
+                    if (query.id && existingIds.has(query.id)) {
+                        return false;
+                    }
+
+                    // Vérifier aussi par nom pour éviter les doublons
+                    const nameExists = savedQueries.some(q =>
+                        q.name.toLowerCase() === query.name.toLowerCase()
+                    );
+                    return !nameExists;
+                });
+
+                if (newQueries.length === 0) {
+                    toast.current.show({
+                        severity: 'warn',
+                        summary: 'Import annulé',
+                        detail: 'Toutes les requêtes du fichier existent déjà'
+                    });
+                    return;
+                }
+
+                // S'assurer que chaque requête a un ID unique
+                const queriesWithUniqueIds = newQueries.map(query => ({
+                    ...query,
+                    id: query.id || `imported_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    timestamp: query.timestamp || new Date().toISOString(),
+                    version: query.version || '1.0'
+                }));
+
+                const updatedQueries = [...savedQueries, ...queriesWithUniqueIds];
+                setSavedQueries(updatedQueries);
+                localStorage.setItem('savedQueries', JSON.stringify(updatedQueries));
+
+                // Réorganiser par date (plus récentes d'abord)
+                const sortedQueries = [...updatedQueries].sort((a, b) =>
+                    new Date(b.timestamp) - new Date(a.timestamp)
+                );
+                setSavedQueries(sortedQueries);
+                localStorage.setItem('savedQueries', JSON.stringify(sortedQueries));
+
+                toast.current.show({
+                    severity: 'success',
+                    summary: 'Import réussi',
+                    detail: `${queriesWithUniqueIds.length} requête(s) importée(s) (${validQueries.length - queriesWithUniqueIds.length} déjà existantes)`
+                });
+
             } catch (error) {
+                console.error('Erreur d\'import détaillée:', error);
+                console.error('Contenu du fichier:', e.target.result);
+
+                let errorMessage = error.message || 'Erreur inconnue';
+
+                // Messages d'erreur plus précis
+                if (error.message.includes('JSON')) {
+                    errorMessage = 'Le fichier n\'est pas un JSON valide. Vérifiez son contenu.';
+                } else if (error.message.includes('vide')) {
+                    errorMessage = 'Le fichier est vide.';
+                } else if (error.message.includes('requête')) {
+                    errorMessage = error.message;
+                }
+
                 toast.current.show({
                     severity: 'error',
                     summary: 'Erreur d\'import',
-                    detail: 'Le fichier n\'est pas valide'
+                    detail: errorMessage
                 });
             }
         };
-        reader.readAsText(file);
+
+        reader.onerror = () => {
+            toast.current.show({
+                severity: 'error',
+                summary: 'Erreur de lecture',
+                detail: 'Impossible de lire le fichier. Vérifiez les permissions.'
+            });
+        };
+
+        try {
+            reader.readAsText(file, 'UTF-8');
+        } catch (readError) {
+            toast.current.show({
+                severity: 'error',
+                summary: 'Erreur',
+                detail: 'Impossible de lire le fichier. Format non supporté.'
+            });
+        }
 
         // Reset le input file
         event.target.value = '';
@@ -699,11 +867,26 @@ export default function App() {
             return;
         }
 
+        // Vérifier si le nom existe déjà
+        const nameExists = savedQueries.some(query =>
+            query.name.toLowerCase() === queryName.trim().toLowerCase()
+        );
+
+        if (nameExists) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Nom déjà utilisé',
+                detail: 'Une requête avec ce nom existe déjà. Veuillez choisir un autre nom.'
+            });
+            return;
+        }
+
         const queryData = {
-            id: `query_${Date.now()}`,
+            id: `query_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             name: queryName.trim(),
             description: queryDescription.trim(),
             timestamp: new Date().toISOString(),
+            version: '1.0',
             config: {
                 username,
                 selectedTable,
@@ -741,7 +924,7 @@ export default function App() {
         toast.current.show({
             severity: 'success',
             summary: 'Requête sauvegardée',
-            detail: `"${queryData.name}" a été sauvegardée`
+            detail: `"${queryData.name}" a été sauvegardée au format .req`
         });
     };
 
@@ -749,27 +932,59 @@ export default function App() {
     const loadSavedQuery = (query) => {
         console.log('Chargement de la requête:', query);
 
+        // Vérifier si la table existe encore
+        if (!tables[query.config.selectedTable]) {
+            toast.current.show({
+                severity: 'warn',
+                summary: 'Table introuvable',
+                detail: `La table "${query.config.selectedTable}" n'existe plus. Veuillez vérifier votre connexion.`
+            });
+            return;
+        }
+
         // Mettre à jour tous les états avec la configuration sauvegardée
         setSelectedTable(query.config.selectedTable);
-        setSelectedColumns([...query.config.selectedColumns]);
-        setFilters(query.config.filters.map(f => ({
+
+        // Filtrer les colonnes qui existent encore
+        const tableFields = tables[query.config.selectedTable]?.fields || [];
+        const existingColumns = query.config.selectedColumns.filter(col =>
+            tableFields.some(field => field.name === col)
+        );
+        setSelectedColumns(existingColumns);
+
+        // Filtrer les filtres pour les colonnes existantes
+        const existingFilters = query.config.filters.filter(f =>
+            tableFields.some(field => field.name === f.field)
+        );
+        setFilters(existingFilters.map(f => ({
             ...f,
-            id: `filter_${Date.now()}_${Math.random()}`,
+            id: `filter_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             label: formatColumnLabel(f.field)
         })));
-        setSorting(query.config.sorting.map(s => ({
+
+        // Filtrer les tris pour les colonnes existantes
+        const existingSorting = query.config.sorting.filter(s =>
+            tableFields.some(field => field.name === s.field)
+        );
+        setSorting(existingSorting.map(s => ({
             ...s,
-            id: `sort_${Date.now()}_${Math.random()}`,
+            id: `sort_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             label: formatColumnLabel(s.field)
         })));
-        setAggregates(query.config.aggregates.map(a => ({
+
+        // Filtrer les agrégats pour les colonnes existantes
+        const existingAggregates = query.config.aggregates.filter(a =>
+            a.columns.every(col => tableFields.some(field => field.name === col))
+        );
+        setAggregates(existingAggregates.map(a => ({
             ...a,
-            id: `agg_${Date.now()}_${Math.random()}`,
+            id: `agg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             label: `${a.type === 'SUM' ? 'Somme' : a.type === 'AVG' ? 'Moyenne' : 'Compte'} de ${
                 a.columns.length > 0 ?
                     a.columns.map(col => formatColumnLabel(col)).join(', ') : 'tous les champs'
             }`
         })));
+
         setPagination({ ...query.config.pagination });
 
         setShowLoadQueryDialog(false);
@@ -777,7 +992,7 @@ export default function App() {
         toast.current.show({
             severity: 'success',
             summary: 'Requête chargée',
-            detail: `"${query.name}" a été chargée`
+            detail: `"${query.name}" a été chargée (${existingColumns.length}/${query.config.selectedColumns.length} colonnes disponibles)`
         });
 
         // Exécuter automatiquement la requête après un délai
@@ -788,27 +1003,97 @@ export default function App() {
 
     // Fonction pour supprimer une requête sauvegardée
     const deleteSavedQuery = (queryId) => {
-        const updatedQueries = savedQueries.filter(q => q.id !== queryId);
-        setSavedQueries(updatedQueries);
-        localStorage.setItem('savedQueries', JSON.stringify(updatedQueries));
+        const queryToDelete = savedQueries.find(q => q.id === queryId);
+        if (!queryToDelete) return;
 
-        toast.current.show({
-            severity: 'success',
-            summary: 'Requête supprimée',
-            detail: 'La requête a été supprimée de vos sauvegardes'
-        });
+        if (window.confirm(`Êtes-vous sûr de vouloir supprimer la requête "${queryToDelete.name}" ?`)) {
+            const updatedQueries = savedQueries.filter(q => q.id !== queryId);
+            setSavedQueries(updatedQueries);
+            localStorage.setItem('savedQueries', JSON.stringify(updatedQueries));
+
+            toast.current.show({
+                severity: 'success',
+                summary: 'Requête supprimée',
+                detail: `"${queryToDelete.name}" a été supprimée`
+            });
+        }
     };
 
     // Fonction pour exporter une seule requête
     const exportSingleQuery = (query) => {
         const dataStr = JSON.stringify(query, null, 2);
         const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-        const exportFileName = `requete_${query.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.json`;
+
+        // Utiliser le timestamp pour un nom unique si le nom contient des caractères spéciaux
+        const safeName = query.name
+            .replace(/[^a-z0-9\s-]/gi, '')
+            .trim()
+            .replace(/\s+/g, '_')
+            .toLowerCase();
+
+        const timestamp = new Date(query.timestamp).toISOString().split('T')[0];
+        const exportFileName = `requete_${safeName}_${timestamp}.req`;
 
         const linkElement = document.createElement('a');
         linkElement.setAttribute('href', dataUri);
         linkElement.setAttribute('download', exportFileName);
         linkElement.click();
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Export réussi',
+            detail: `"${query.name}" exportée au format .req`
+        });
+    };
+
+    // Fonction pour dupliquer une requête sauvegardée
+    const duplicateSavedQuery = (query) => {
+        const newQuery = {
+            ...query,
+            id: `query_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            name: `${query.name} (Copie)`,
+            timestamp: new Date().toISOString()
+        };
+
+        const updatedQueries = [...savedQueries, newQuery];
+        setSavedQueries(updatedQueries);
+        localStorage.setItem('savedQueries', JSON.stringify(updatedQueries));
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Requête dupliquée',
+            detail: `Copie de "${query.name}" créée`
+        });
+    };
+
+    // Fonction pour réorganiser les requêtes par nom
+    const sortQueriesByName = () => {
+        const sortedQueries = [...savedQueries].sort((a, b) =>
+            a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })
+        );
+        setSavedQueries(sortedQueries);
+        localStorage.setItem('savedQueries', JSON.stringify(sortedQueries));
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Tri effectué',
+            detail: 'Requêtes triées par nom'
+        });
+    };
+
+    // Fonction pour réorganiser les requêtes par date
+    const sortQueriesByDate = () => {
+        const sortedQueries = [...savedQueries].sort((a, b) =>
+            new Date(b.timestamp) - new Date(a.timestamp)
+        );
+        setSavedQueries(sortedQueries);
+        localStorage.setItem('savedQueries', JSON.stringify(sortedQueries));
+
+        toast.current.show({
+            severity: 'success',
+            summary: 'Tri effectué',
+            detail: 'Requêtes triées par date (plus récentes d\'abord)'
+        });
     };
 
 
@@ -827,34 +1112,40 @@ export default function App() {
                                 <small className="text-muted">Interface visuelle pour bases Oracle</small>
                             </div>
                         </div>
-                        {connected && userInfo && (
-                            <div className="d-flex align-items-center gap-3">
+                        <div className="d-flex align-items-center gap-3">
+                            {connected && userInfo && (
                                 <div className="text-end">
                                     <div className="fw-semibold">{userInfo.USERNAME}</div>
                                     <small className="text-muted">
                                         {userInfo.TABLE_COUNT} table(s) | {userInfo.DEFAULT_TABLESPACE}
                                     </small>
                                 </div>
-                                <div className="d-flex gap-2">
+                            )}
+                            <div className="d-flex gap-2">
+                                <button
+                                    className="btn btn-outline-primary btn-sm d-flex align-items-center"
+                                    onClick={() => setShowLoadQueryDialog(true)}
+                                >
+                                    <i className="pi pi-folder me-1"></i>
+                                    Mes requêtes
+                                    {savedQueries.length > 0 && (
+                                        <span className="badge bg-primary rounded-pill ms-2">
+                                            {savedQueries.length}
+                                        </span>
+                                    )}
+                                </button>
+                                {connected && (
                                     <button
-                                        className="btn btn-outline-primary btn-sm"
-                                        onClick={() => setShowLoadQueryDialog(true)}
-                                        disabled={savedQueries.length === 0}
-                                    >
-                                        <i className="pi pi-folder me-1"></i>
-                                        Mes requêtes
-                                    </button>
-                                    <button
-                                        className="btn btn-primary btn-sm"
+                                        className="btn btn-primary btn-sm d-flex align-items-center"
                                         onClick={() => setShowSaveQueryDialog(true)}
                                         disabled={!selectedTable || result.length === 0}
                                     >
                                         <i className="pi pi-save me-1"></i>
                                         Sauvegarder
                                     </button>
-                                </div>
+                                )}
                             </div>
-                        )}
+                        </div>
                     </div>
                 </div>
             </header>
@@ -1909,48 +2200,104 @@ export default function App() {
                                 <button type="button" className="btn-close" onClick={() => setShowLoadQueryDialog(false)}></button>
                             </div>
                             <div className="modal-body">
-                                {savedQueries.length === 0 ? (
-                                    <div className="text-center py-5">
-                                        <i className="pi pi-inbox text-muted mb-3" style={{ fontSize: '3rem' }}></i>
-                                        <h5 className="text-muted mb-2">Aucune requête sauvegardée</h5>
-                                        <p className="text-muted">
-                                            Créez et sauvegardez vos premières requêtes pour les retrouver ici.
-                                        </p>
+                                <div className="d-flex justify-content-between align-items-center mb-3">
+                                    <div>
+                                        <h6 className="mb-0">
+                                            {savedQueries.length === 0
+                                                ? "Aucune requête sauvegardée"
+                                                : `${savedQueries.length} requête(s) sauvegardée(s)`}
+                                        </h6>
                                     </div>
-                                ) : (
-                                    <>
-                                        <div className="d-flex justify-content-between align-items-center mb-3">
-
-                                            <div className="text-muted">
-                                                {savedQueries.length} requête(s) sauvegardée(s)
-                                            </div>
-
-                                            <div className="d-flex align-items-center gap-2">
-
+                                    <div className="d-flex align-items-center gap-2">
+                                        {savedQueries.length > 0 && (
+                                            <>
+                                                <button
+                                                    className="btn btn-outline-secondary btn-sm"
+                                                    onClick={sortQueriesByName}
+                                                    title="Trier par nom"
+                                                >
+                                                    <i className="pi pi-sort-alpha-down me-1"></i>
+                                                    Par nom
+                                                </button>
+                                                <button
+                                                    className="btn btn-outline-secondary btn-sm"
+                                                    onClick={sortQueriesByDate}
+                                                    title="Trier par date"
+                                                >
+                                                    <i className="pi pi-sort-numeric-down me-1"></i>
+                                                    Par date
+                                                </button>
                                                 <button
                                                     className="btn btn-outline-primary btn-sm d-flex align-items-center"
                                                     onClick={exportQueries}
+                                                    title="Exporter toutes les requêtes"
                                                 >
                                                     <i className="pi pi-download me-1"></i>
                                                     Exporter tout
                                                 </button>
+                                            </>
+                                        )}
+                                        <label className="btn btn-outline-success btn-sm d-flex align-items-center mb-0">
+                                            <i className="pi pi-upload me-1"></i>
+                                            Importer
+                                            <input
+                                                type="file"
+                                                accept=".req,.json"
+                                                onChange={importQueries}
+                                                style={{ display: 'none' }}
+                                            />
+                                        </label>
+                                    </div>
+                                </div>
 
-                                                <label className="btn btn-outline-success btn-sm d-flex align-items-center mb-0">
-                                                    <i className="pi pi-upload me-1"></i>
-                                                    Importer
-                                                    <input
-                                                        type="file"
-                                                        accept=".json"
-                                                        onChange={importQueries}
-                                                        style={{ display: 'none' }}
-                                                    />
-                                                </label>
-
-                                            </div>
-
+                                {savedQueries.length === 0 ? (
+                                    <div className="text-center py-5">
+                                        <i className="pi pi-inbox text-muted mb-3" style={{ fontSize: '3rem' }}></i>
+                                        <h5 className="text-muted mb-2">Aucune requête sauvegardée</h5>
+                                        <p className="text-muted mb-4">
+                                            Créez et sauvegardez vos premières requêtes pour les retrouver ici.
+                                            Vous pouvez aussi importer des requêtes existantes.
+                                        </p>
+                                        <div className="d-flex justify-content-center gap-3">
+                                            <button
+                                                className="btn btn-outline-primary"
+                                                onClick={() => {
+                                                    setShowLoadQueryDialog(false);
+                                                    if (connected) {
+                                                        toast.current.show({
+                                                            severity: 'info',
+                                                            summary: 'Créer une requête',
+                                                            detail: 'Sélectionnez d\'abord une table pour créer une requête'
+                                                        });
+                                                    }
+                                                }}
+                                            >
+                                                <i className="pi pi-plus me-1"></i>
+                                                Créer une requête
+                                            </button>
+                                            <label className="btn btn-success">
+                                                <i className="pi pi-upload me-1"></i>
+                                                Importer des requêtes
+                                                <input
+                                                    type="file"
+                                                    accept=".req,.json"
+                                                    onChange={importQueries}
+                                                    style={{ display: 'none' }}
+                                                />
+                                            </label>
                                         </div>
-
-
+                                        <div className="mt-4">
+                                            <div className="alert alert-light">
+                                                <i className="pi pi-info-circle me-2"></i>
+                                                <small>
+                                                    Format de fichier accepté : <strong>.req</strong> (format natif) ou <strong>.json</strong><br/>
+                                                    Les requêtes sont sauvegardées localement dans votre navigateur.
+                                                </small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <>
                                         <div className="list-group">
                                             {savedQueries.map((query) => (
                                                 <div key={query.id} className="list-group-item">
@@ -1959,9 +2306,9 @@ export default function App() {
                                                             <div className="d-flex align-items-center mb-1">
                                                                 <h6 className="mb-0 me-2">{query.name}</h6>
                                                                 <span className="badge bg-light text-dark">
-                                                        <i className="pi pi-calendar me-1"></i>
+                                                                    <i className="pi pi-calendar me-1"></i>
                                                                     {new Date(query.timestamp).toLocaleDateString('fr-FR')}
-                                                    </span>
+                                                                </span>
                                                             </div>
                                                             {query.description && (
                                                                 <p className="text-muted small mb-2">{query.description}</p>
@@ -1990,11 +2337,21 @@ export default function App() {
                                                             </div>
                                                         </div>
                                                         <div className="d-flex flex-column gap-1">
+                                                            {connected && (
+                                                                <button
+                                                                    className="btn btn-sm btn-primary"
+                                                                    onClick={() => loadSavedQuery(query)}
+                                                                    title="Charger cette requête"
+                                                                >
+                                                                    <i className="pi pi-play"></i>
+                                                                </button>
+                                                            )}
                                                             <button
-                                                                className="btn btn-sm btn-primary"
-                                                                onClick={() => loadSavedQuery(query)}
+                                                                className="btn btn-sm btn-outline-info"
+                                                                onClick={() => duplicateSavedQuery(query)}
+                                                                title="Dupliquer cette requête"
                                                             >
-                                                                <i className="pi pi-play"></i>
+                                                                <i className="pi pi-copy"></i>
                                                             </button>
                                                             <button
                                                                 className="btn btn-sm btn-outline-secondary"
@@ -2014,6 +2371,15 @@ export default function App() {
                                                     </div>
                                                 </div>
                                             ))}
+                                        </div>
+                                        <div className="mt-3">
+                                            <div className="alert alert-light">
+                                                <i className="pi pi-info-circle me-2"></i>
+                                                <small>
+                                                    Total : {savedQueries.length} requête(s) |
+                                                    Utilisation du localStorage : {Math.round(JSON.stringify(savedQueries).length / 1024)} Ko
+                                                </small>
+                                            </div>
                                         </div>
                                     </>
                                 )}
